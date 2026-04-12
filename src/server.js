@@ -278,6 +278,87 @@ app.get("/patch-jobs", apiRateLimit, authMiddleware, async (req, res) => {
   }
 });
 
+// ─── Patch Orchestration (polling model) ─────────────────────────────────────
+
+// Dashboard triggers a patch — creates a pending record agents will pick up
+app.post("/patch", apiRateLimit, authMiddleware, async (req, res) => {
+  const { deviceId, bundleId, label, appName, mode } = req.body;
+
+  if (!deviceId || typeof deviceId !== "string") return res.status(400).json({ error: "deviceId is required" });
+  if (!label || typeof label !== "string") return res.status(400).json({ error: "label is required" });
+  if (!appName || typeof appName !== "string") return res.status(400).json({ error: "appName is required" });
+
+  const id = `patch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const createdAt = new Date().toISOString();
+
+  try {
+    await pool.query(`
+      INSERT INTO pending_patches (id, device_id, bundle_id, label, app_name, mode, created_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `, [id, s(deviceId, 100), s(bundleId), s(label, 100), s(appName), s(mode, 50) || "managed", createdAt]);
+
+    console.log(`[Patch] Queued ${label} for ${deviceId}`);
+    res.json({ ok: true, id, deviceId, label, appName, createdAt });
+  } catch (err) {
+    console.error("[POST /patch]", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Agents poll this to find pending work for their device
+app.get("/pending-patches", apiRateLimit, authMiddleware, async (req, res) => {
+  const deviceId = s(req.query.device_id, 100);
+  if (!deviceId) return res.status(400).json({ error: "device_id is required" });
+
+  try {
+    const result = await pool.query(`
+      SELECT * FROM pending_patches
+      WHERE device_id = $1 AND claimed_at IS NULL
+      ORDER BY created_at ASC
+    `, [deviceId]);
+    res.json({ patches: result.rows });
+  } catch (err) {
+    console.error("[GET /pending-patches]", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Agent claims a patch atomically before running Installomator
+app.post("/pending-patches/:id/claim", apiRateLimit, authMiddleware, async (req, res) => {
+  const id = s(req.params.id, 100);
+  const claimedAt = new Date().toISOString();
+
+  try {
+    const result = await pool.query(`
+      UPDATE pending_patches SET claimed_at = $1
+      WHERE id = $2 AND claimed_at IS NULL
+      RETURNING *
+    `, [claimedAt, id]);
+
+    if (!result.rows.length) return res.status(409).json({ error: "Already claimed or not found" });
+    res.json({ ok: true, patch: result.rows[0] });
+  } catch (err) {
+    console.error("[POST /pending-patches/:id/claim]", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ─── Cleanup ──────────────────────────────────────────────────────────────────
+
+// Remove claimed pending_patches older than 24h
+setInterval(async () => {
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const result = await pool.query(
+      "DELETE FROM pending_patches WHERE created_at < $1",
+      [cutoff]
+    );
+    if (result.rowCount > 0) console.log(`[Cleanup] Removed ${result.rowCount} old pending patches`);
+  } catch (err) {
+    console.error("[Cleanup] pending_patches:", err.message);
+  }
+}, 60 * 60 * 1000); // every hour
+
 // ─── 404 / Error handlers ─────────────────────────────────────────────────────
 
 app.use((req, res) => res.status(404).json({ error: "Not found" }));

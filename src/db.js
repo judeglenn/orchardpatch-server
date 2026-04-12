@@ -58,10 +58,22 @@ async function migrate() {
       completed_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS pending_patches (
+      id TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      bundle_id TEXT,
+      label TEXT NOT NULL,
+      app_name TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'managed',
+      created_at TEXT NOT NULL,
+      claimed_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_apps_device ON apps(device_id);
     CREATE INDEX IF NOT EXISTS idx_apps_bundle ON apps(bundle_id);
     CREATE INDEX IF NOT EXISTS idx_patch_jobs_device ON patch_jobs(device_id);
     CREATE INDEX IF NOT EXISTS idx_patch_jobs_status ON patch_jobs(status);
+    CREATE INDEX IF NOT EXISTS idx_pending_patches_device ON pending_patches(device_id);
   `);
   console.log("[DB] Schema ready");
 }
