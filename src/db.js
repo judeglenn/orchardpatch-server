@@ -23,6 +23,7 @@ async function migrate() {
       ram TEXT,
       cpu TEXT,
       agent_version TEXT,
+      agent_url TEXT,
       last_seen TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
     );
@@ -74,7 +75,30 @@ async function migrate() {
     CREATE INDEX IF NOT EXISTS idx_patch_jobs_device ON patch_jobs(device_id);
     CREATE INDEX IF NOT EXISTS idx_patch_jobs_status ON patch_jobs(status);
     CREATE INDEX IF NOT EXISTS idx_pending_patches_device ON pending_patches(device_id);
+
+    CREATE TABLE IF NOT EXISTS latest_versions (
+      label TEXT PRIMARY KEY,
+      latest_version TEXT,
+      last_checked TEXT,
+      error TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS app_catalog (
+      label TEXT PRIMARY KEY,
+      app_name TEXT,
+      bundle_id TEXT,
+      expected_team TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_latest_versions_label ON latest_versions(label);
+    CREATE INDEX IF NOT EXISTS idx_app_catalog_bundle ON app_catalog(bundle_id);
   `);
+
+  // Add agent_url to devices for existing deployments
+  await pool.query(`
+    ALTER TABLE devices ADD COLUMN IF NOT EXISTS agent_url TEXT;
+  `).catch(() => {}); // ignore if already exists or unsupported
+
   console.log("[DB] Schema ready");
 }
 

@@ -7,6 +7,8 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const pool = require("./db");
+const versionSyncRouter = require("./routes/version-sync");
+const catalogSyncRouter = require("./routes/catalog-sync");
 
 const app = express();
 const PORT = process.env.PORT || 4747;
@@ -85,7 +87,7 @@ function sint(val, fallback = null) {
 // ─── Agent Check-in ───────────────────────────────────────────────────────────
 
 app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
-  const { device, apps, agentVersion, collectedAt } = req.body;
+  const { device, apps, agentVersion, agentUrl, collectedAt } = req.body;
 
   if (!device || typeof device !== "object") return res.status(400).json({ error: "device is required" });
   if (!device.hostname) return res.status(400).json({ error: "device.hostname is required" });
@@ -101,8 +103,8 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
   try {
     // Upsert device
     await pool.query(`
-      INSERT INTO devices (id, hostname, serial, model, os_version, ram, cpu, agent_version, last_seen)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      INSERT INTO devices (id, hostname, serial, model, os_version, ram, cpu, agent_version, agent_url, last_seen)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
       ON CONFLICT(id) DO UPDATE SET
         hostname = EXCLUDED.hostname,
         model = EXCLUDED.model,
@@ -110,10 +112,11 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
         ram = EXCLUDED.ram,
         cpu = EXCLUDED.cpu,
         agent_version = EXCLUDED.agent_version,
+        agent_url = EXCLUDED.agent_url,
         last_seen = EXCLUDED.last_seen
     `, [deviceId, s(device.hostname), s(device.serial, 50), s(device.model),
         s(device.osVersion, 50), s(device.ram, 50), s(device.cpu),
-        s(agentVersion, 50) || "unknown", now]);
+        s(agentVersion, 50) || "unknown", s(agentUrl, 500) || null, now]);
 
     // Upsert apps
     if (Array.isArray(apps) && apps.length > 0) {
@@ -358,6 +361,12 @@ setInterval(async () => {
     console.error("[Cleanup] pending_patches:", err.message);
   }
 }, 60 * 60 * 1000); // every hour
+
+// ─── Version Cache ────────────────────────────────────────────────────────────
+
+app.use("/api/version-sync", apiRateLimit, authMiddleware, versionSyncRouter);
+app.use("/api/catalog-sync", apiRateLimit, authMiddleware, catalogSyncRouter);
+app.use("/api/catalog", apiRateLimit, authMiddleware, catalogSyncRouter);
 
 // ─── 404 / Error handlers ─────────────────────────────────────────────────────
 
