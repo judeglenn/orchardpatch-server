@@ -49,6 +49,10 @@ router.post("/", async (req, res) => {
   let tree;
   try {
     const data = await fetchJson(INSTALLOMATOR_TREE_API, token);
+    console.log(`[catalog-sync] GitHub API response — token present: ${!!token}, truncated: ${data.truncated}, tree length: ${data.tree?.length ?? 'N/A'}, top-level keys: ${Object.keys(data).join(', ')}`);
+    if (data.tree?.length > 0) {
+      console.log(`[catalog-sync] First 3 tree entries:`, JSON.stringify(data.tree.slice(0, 3)));
+    }
     tree = data.tree || [];
   } catch (err) {
     return res.status(502).json({ error: `GitHub API failed: ${err.message}` });
@@ -57,6 +61,8 @@ router.post("/", async (req, res) => {
   const labelFiles = tree
     .filter(f => f.path.startsWith("Labels/") && f.path.endsWith(".sh"))
     .slice(0, limit);
+
+  console.log(`[catalog-sync] Label files found after filter: ${labelFiles.length} (limit: ${limit})`);
 
   if (labelFiles.length === 0) {
     return res.status(502).json({ error: "No label files found in Installomator repo" });
