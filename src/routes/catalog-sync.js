@@ -45,7 +45,7 @@ function parseFragment(content) {
 // POST /api/catalog-sync
 router.post("/", async (req, res) => {
   const token = process.env.GITHUB_TOKEN;
-  const limit = Math.min(parseInt(req.body?.limit) || 100, 1200);
+  const limit = Math.min(parseInt(req.body?.limit) || 2000, 2000);
 
   let tree;
   try {
