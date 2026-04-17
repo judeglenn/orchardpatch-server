@@ -10,6 +10,7 @@ const pool = require("../db");
 
 const INSTALLOMATOR_TREE_API = "https://api.github.com/repos/Installomator/Installomator/git/trees/main?recursive=1";
 const RAW_BASE = "https://raw.githubusercontent.com/Installomator/Installomator/main";
+const LABELS_PREFIX = "fragments/labels/"; // repo restructured — labels moved from Labels/ to fragments/labels/
 
 async function fetchJson(url, token) {
   const { default: fetch } = await import("node-fetch");
@@ -59,7 +60,7 @@ router.post("/", async (req, res) => {
   }
 
   const labelFiles = tree
-    .filter(f => f.path.startsWith("Labels/") && f.path.endsWith(".sh"))
+    .filter(f => f.path.startsWith(LABELS_PREFIX) && f.path.endsWith(".sh") && f.type === "blob")
     .slice(0, limit);
 
   console.log(`[catalog-sync] Label files found after filter: ${labelFiles.length} (limit: ${limit})`);
@@ -71,7 +72,7 @@ router.post("/", async (req, res) => {
   const results = { upserted: 0, skipped: 0, errors: 0 };
 
   for (const file of labelFiles) {
-    const label = file.path.replace("Labels/", "").replace(".sh", "");
+    const label = file.path.replace(LABELS_PREFIX, "").replace(".sh", "");
     try {
       const content = await fetchText(`${RAW_BASE}/${file.path}`, token);
       const parsed = parseFragment(content);
