@@ -24,12 +24,37 @@ and patching via Installomator — without touching your MDM. Tagline:
 - Agent: Node.js LaunchDaemon (root), local HTTP on port 47652
 - Auth: x-orchardpatch-token header, SERVER_TOKEN env var
 
+## Environment variables (Railway)
+- DATABASE_URL — PostgreSQL connection (Railway env ref)
+- SERVER_TOKEN — auth token for all API endpoints
+- GITHUB_TOKEN — fine-grained PAT for catalog-sync GitHub API calls
+  (tighten scope to Installomator repo only when convenient)
+- PORT — set by Railway
+- DATA_DIR — data directory
+
 ## Architecture decisions
 - Agent ↔ server: REST polling only, no WebSocket
 - Server cannot reach agents directly (Railway → NAT'd agent doesn't work)
 - Version data is agent-initiated push, not server-pull
 - Agent polls every 15 min; version checks run every 10 check-ins (~2.5 hrs)
 - Patching via Installomator only — no MDM conflicts, no Secure Token needed
+
+## Key design constraints
+- Works in BeyondTrust / privilege management environments
+- No sudo required — LaunchDaemon runs as root
+- No MDM conflicts — agent pattern same as Jamf/Mosyle/Kandji
+- Installomator is the only patch mechanism (1,083 supported apps)
+- Single-tenant for now — multi-tenancy is a prerequisite for
+  Patch by the Orchard enterprise tier
+
+## AI development workflow
+- Primary dev assistant: Chip (OpenClaw, Claude via API)
+- Architecture / planning: Claude.ai (claude.ai)
+- Workflow: Claude.ai for architecture decisions and code scaffolding,
+  Chip for execution and codebase-aware implementation
+- Context is lost when Chip compacts — use this file to restore
+- Start Claude.ai sessions by pasting current CONTEXT.md for instant context
+- End every session: ask Claude.ai to update CONTEXT.md, paste to Chip, commit
 
 ## Feature status
 
@@ -74,8 +99,7 @@ latest." Enterprise tier. Needs multi-tenancy first. Version cache
 (shipped today) is the foundational dependency.
 
 ## Open items / tech debt
-- GitHub PAT (orchardpatch-catalog-sync) scoped to all public repos —
-  tighten to Installomator repo only
+- GitHub PAT scoped to all public repos — tighten to Installomator repo only
 - agent_url column on devices table exists but unused —
   reserved for future server-initiated flows
 - No DB indexes on fleet queries yet — will matter at scale
