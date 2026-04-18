@@ -164,9 +164,16 @@ app.get("/devices", apiRateLimit, authMiddleware, async (req, res) => {
     const result = await pool.query(`
       SELECT d.*,
         COUNT(DISTINCT a.bundle_id) as app_count,
-        SUM(a.is_outdated) as outdated_count
+        COUNT(DISTINCT CASE
+          WHEN lv.latest_version IS NOT NULL
+            AND a.version IS DISTINCT FROM lv.latest_version
+          THEN a.bundle_id
+        END) as outdated_count
       FROM devices d
       LEFT JOIN apps a ON a.device_id = d.id
+      LEFT JOIN app_catalog ac ON ac.bundle_id = a.bundle_id
+      LEFT JOIN latest_versions lv
+        ON lv.label = COALESCE(a.installomator_label, ac.label)
       GROUP BY d.id
       ORDER BY d.last_seen DESC
     `);
@@ -239,7 +246,7 @@ app.get("/stats", apiRateLimit, authMiddleware, async (req, res) => {
     const [devices, apps, outdated, installs, jobTotal, jobSuccess, jobFailed, lastCheckin] = await Promise.all([
       pool.query("SELECT COUNT(*) as n FROM devices"),
       pool.query("SELECT COUNT(DISTINCT bundle_id) as n FROM apps"),
-      pool.query("SELECT COUNT(DISTINCT bundle_id) as n FROM apps WHERE is_outdated = 1"),
+      pool.query(`SELECT COUNT(DISTINCT a.bundle_id) as n FROM apps a LEFT JOIN app_catalog ac ON ac.bundle_id = a.bundle_id LEFT JOIN latest_versions lv ON lv.label = COALESCE(a.installomator_label, ac.label) WHERE lv.latest_version IS NOT NULL AND a.version IS DISTINCT FROM lv.latest_version`),
       pool.query("SELECT COUNT(*) as n FROM apps"),
       pool.query("SELECT COUNT(*) as n FROM patch_jobs"),
       pool.query("SELECT COUNT(*) as n FROM patch_jobs WHERE status = 'success'"),
