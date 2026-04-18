@@ -82,6 +82,10 @@ A Mac admin tool providing complete visibility into managed macOS fleet apps and
 - Installomator path — /usr/local/bin/Installomator.sh baked into INSTALLOMATOR_PATHS, symlink not needed
 - Duplicate /fleet/devices/[id] route — now redirects to canonical /devices/[id]
 - Verified end-to-end: Slack 4.38.125 → patched → 4.49.81 confirmed (Chip's Mac), 1Password 7.9.10 → patched → 7.9.11 confirmed (Chip's Mac), Docker 4.54.0 → patched → 4.69.0 confirmed (Jude's Mac)
+- HomePageInner now uses /apps/status instead of raw /apps; hasVersionConflict reads patch_status==='outdated' (was is_outdated===1, always false); patchAllOutdated dep array fixed [] → [apps]
+- Patch History Device column fixed — normalization typo (deviceId:j.device_name) corrected to deviceId:j.device_id + deviceName:j.device_name||j.device_id; server already had JOIN, purely frontend fix
+- Redundant raw /apps fetch removed from api/fleet/apps/[id]/route.ts; deviceNames lookup now built from /devices only
+- Patch All button hidden on app detail page (Patch by the Bushel not yet built); TODO comment in code
 
 ### ⚠️ Partially built
 - Patch by the Bushel (fleet patching) — UI exists, bulk dispatch not wired. "Patch All" button errors with "deviceId is required" — needs deviceId passed per device in the loop
@@ -107,11 +111,11 @@ A Mac admin tool providing complete visibility into managed macOS fleet apps and
 
 ## Polish punch list (pre-demo)
 
-### Batch 1 — Data fixes
-- Audit all routes still hitting raw /apps instead of /apps/status
-- "Patch All" button fix — pass deviceId per device in the loop
+### Batch 1 — Data fixes ✅ DONE (commit b6cc392)
+- ~~Audit all routes still hitting raw /apps instead of /apps/status~~ ✅
+- ~~"Patch All" button fix~~ → hidden (Patch by the Bushel not yet built) ✅
 - Per-device Patch button should only show on outdated rows (currently shows on current rows too)
-- Device name column empty in Patch History
+- ~~Device name column empty in Patch History~~ ✅
 
 ### Batch 2 — Device detail interactions
 - App rows not clickable — link to app detail page
@@ -155,6 +159,8 @@ A Mac admin tool providing complete visibility into managed macOS fleet apps and
 - GET /api/catalog — browse catalog
 
 ## Open items / tech debt
+- **Patch by the Bushel (app detail page):** "Patch All" button is hidden. Real fan-out requires fleet-wide dispatch from the server — POST /patch once per device that has the app installed as outdated. The `patchDeviceId=null` path in `handleConfirmPatch` in `apps/[id]/page.tsx` also uses the hardcoded `INSTALLOMATOR_LABELS` map instead of the `label` field from `/apps/status`. Both must be addressed together when Patch by the Bushel is built.
+
 - GitHub PAT (orchardpatch-catalog-sync) scoped to all public repos — tighten to Installomator repo only
 - agent_url column on devices unused — reserved for future server-initiated flows
 - No DB indexes on fleet queries yet — will matter at scale
