@@ -55,6 +55,13 @@ to install, not manufacturer's current release. This ensures outdated always
 means "patchable right now." Occasional 1-2 day lag between vendor release
 and Installomator catching up is by design.
 
+## System app classification philosophy
+"System" in OrchardPatch = any app signed by Apple (com.apple.* bundle ID)
+or resident under /System/. These are not patchable via Installomator and
+are tracked separately from unknown. Unknown means "third-party app with no
+Installomator label yet." System means "Apple-managed, not our job."
+Future: may add softwareupdate CLI or other sources for system app patching.
+
 ## Key design constraints
 - Works in BeyondTrust / privilege management environments
 - No sudo required — LaunchDaemon runs as root
