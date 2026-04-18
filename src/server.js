@@ -190,6 +190,36 @@ app.get("/devices/:id", apiRateLimit, authMiddleware, async (req, res) => {
   }
 });
 
+app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        a.id,
+        a.device_id,
+        a.bundle_id,
+        a.name,
+        a.version,
+        lv.latest_version,
+        lv.last_checked,
+        COALESCE(a.installomator_label, ac.label) AS label,
+        CASE
+          WHEN lv.latest_version IS NULL THEN 'unknown'
+          WHEN a.version = lv.latest_version THEN 'current'
+          ELSE 'outdated'
+        END AS patch_status
+      FROM apps a
+      LEFT JOIN app_catalog ac ON ac.bundle_id = a.bundle_id
+      LEFT JOIN latest_versions lv
+        ON lv.label = COALESCE(a.installomator_label, ac.label)
+      ORDER BY a.name
+    `);
+    res.json({ apps: result.rows });
+  } catch (err) {
+    console.error("[GET /apps/status]", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 app.get("/apps", apiRateLimit, authMiddleware, async (req, res) => {
   try {
     const outdatedOnly = req.query.outdated === "true";
