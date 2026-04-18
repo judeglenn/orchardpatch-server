@@ -224,6 +224,14 @@ and Installomator catching up is by design.
   server endpoint (POST /commands), and agent changes to poll for and
   execute pending commands on each check-in cycle. Agent cannot be reached
   directly from Railway (NAT). Design and build as one unit when ready.
+- **Version checker is per-device, not fleet-wide:** `buildLabelList()` in
+  version-checker.js only checks labels from the local device's inventory.
+  Apps installed on only one device have a cold-cache window of up to ~2.5
+  hours after agent restart before `latest_versions` is populated. Fix: after
+  building the local label list, fetch all labels currently seen across the
+  fleet from the server and union them in. One agent should cover the full
+  fleet label space on every version check run. Build as a discrete change
+  when ready.
 - **Patch by the Bushel (app detail page):** "Patch All" button is hidden.
   Real fan-out requires fleet-wide dispatch from the server — POST /patch
   once per device that has the app installed as outdated. The
