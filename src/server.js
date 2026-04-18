@@ -214,6 +214,7 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
         EXTRACT(EPOCH FROM (NOW() - lv.last_checked::timestamptz))::int AS cache_age_seconds,
         COALESCE(a.installomator_label, ac.label) AS label,
         CASE
+          WHEN a.source = 'system' THEN 'na'
           WHEN lv.latest_version IS NULL THEN 'unknown'
           WHEN a.version = lv.latest_version THEN 'current'
           ELSE 'outdated'
