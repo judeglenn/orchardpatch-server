@@ -123,3 +123,68 @@ scheduling/execution layer for policy runs.
 - latest_versions: label (PK), latest_version, last_checked, error
 - app_catalog: label (PK), app_name, bundle_id, expected_team, last_synced
 - patch_jobs: (existing)
+
+## Key API endpoints
+- POST /checkin — agent check-in, inventory push
+- GET /devices — fleet list with outdated_count (latest_versions join)
+- GET /apps — raw app rows
+- GET /apps/status — patch status per app with cache_age_seconds
+- GET /stats — fleet stats (latest_versions join)
+- POST /patch-jobs — queue a patch job
+- GET /patch-jobs — list jobs
+- POST /api/version-sync/ingest — ingest version data (agent or Routines)
+- GET /api/version-sync — full version cache
+- GET /api/version-sync/:label — single label lookup
+- POST /api/catalog-sync — sync Installomator catalog from GitHub
+- GET /api/catalog — browse catalog
+
+## Open items / tech debt
+- GitHub PAT (orchardpatch-catalog-sync) scoped to all public repos —
+  tighten to Installomator repo only
+- agent_url column on devices unused — reserved for future server-initiated flows
+- No DB indexes on fleet queries yet — will matter at scale
+- Catalog auto-sync not automated — manual curl for now
+- Routines integration planned for catalog-sync (weekly schedule)
+- is_outdated field on apps table is legacy, never set by agent — ignore
+- latest_version field on apps table is legacy — latest_versions table is
+  source of truth
+- "Patch All Outdated" button on app detail page has deviceId bug — do not use
+- Version string normalization not implemented — edge case with minor builds
+- Update CONTEXT.md at end of every session and commit to orchardpatch-server
+
+## Environment variables (Railway — fleet server)
+- DATABASE_URL — PostgreSQL connection (Railway env ref)
+- SERVER_TOKEN — auth token for all API endpoints
+- GITHUB_TOKEN — fine-grained PAT for catalog-sync GitHub API calls
+  (tighten scope to Installomator repo only when convenient)
+- PORT — set by Railway
+- DATA_DIR — data directory
+
+## Agent environment variables
+- SERVER_URL — fleet server URL
+- SERVER_TOKEN — matches fleet server
+- INSTALLOMATOR_PATH — default: /usr/local/Installomator/Installomator.sh
+- VERSION_CHECK_INTERVAL — check-ins between version runs (default: 10)
+
+## Key design constraints
+- Works in BeyondTrust / privilege management environments
+- No sudo required — LaunchDaemon runs as root
+- No MDM conflicts — agent pattern same as Jamf/Mosyle/Kandji
+- Installomator is the only patch mechanism (1,083 supported apps)
+- Single-tenant for now — multi-tenancy prerequisite for Patch by the Orchard
+- Installomator fragments now at fragments/labels/ (not Labels/) in repo
+
+## AI development workflow
+- Primary dev assistant: Chip (OpenClaw, Claude API, has own MacBook Pro)
+- Architecture / planning: Claude.ai (this project)
+- Chip pushes via PAT embedded in remote URLs (orchardpatch-server and
+  orchardpatch-agent remotes have working PAT — do not change)
+- Chip's git identity: user.name=Chip, user.email=chip@openclaw
+  orchardpatch-server has local override: Jude Glenn / judeglenn@example.com
+- Context is lost when Chip compacts — use this file to restore
+- Start Claude.ai sessions by opening OrchardPatch project (CONTEXT.md loaded)
+- End every session: ask Claude.ai to update CONTEXT.md, paste to Chip, commit
+- Claude.ai is better for: architecture decisions, code scaffolding,
+  debugging topology/design issues, cross-repo reasoning
+- Chip is better for: codebase-aware implementation, knowing exact file
+  locations, running commands, hot-deploying to installed agent
