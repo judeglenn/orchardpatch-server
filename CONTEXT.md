@@ -86,6 +86,8 @@ A Mac admin tool providing complete visibility into managed macOS fleet apps and
 - Patch History Device column fixed — normalization typo (deviceId:j.device_name) corrected to deviceId:j.device_id + deviceName:j.device_name||j.device_id; server already had JOIN, purely frontend fix
 - Redundant raw /apps fetch removed from api/fleet/apps/[id]/route.ts; deviceNames lookup now built from /devices only
 - Patch All button hidden on app detail page (Patch by the Bushel not yet built); TODO comment in code
+- App rows on device detail page are now clickable links to app detail (/apps/[bundle-id-slug]); hover turns name green
+- Outdated count badge on device detail page is now a clickable filter toggle; active state shows ring + tint; subtitle shows × clear; empty state with both filters active shows "Clear filter" link
 
 ### ⚠️ Partially built
 - Patch by the Bushel (fleet patching) — UI exists, bulk dispatch not wired. "Patch All" button errors with "deviceId is required" — needs deviceId passed per device in the loop
@@ -117,11 +119,11 @@ A Mac admin tool providing complete visibility into managed macOS fleet apps and
 - Per-device Patch button should only show on outdated rows (currently shows on current rows too)
 - ~~Device name column empty in Patch History~~ ✅
 
-### Batch 2 — Device detail interactions
-- App rows not clickable — link to app detail page
-- Outdated count not clickable/filterable
-- Force check-in button next to Last Check-in
-- Patch Now button on outdated app rows
+### Batch 2 — Device detail interactions ✅ DONE (commit 06ac2a7)
+- ~~App rows not clickable~~ ✅
+- ~~Outdated count not clickable/filterable~~ ✅
+- Force check-in button — deferred (see Open Items)
+- ~~Patch Now button on outdated app rows~~ ✅ (was already correct)
 
 ### Batch 3 — System apps
 - Filter or tag system apps (Calendar, Chess, Books etc.) as N/A instead of Unknown
@@ -159,6 +161,7 @@ A Mac admin tool providing complete visibility into managed macOS fleet apps and
 - GET /api/catalog — browse catalog
 
 ## Open items / tech debt
+- **Force check-in button (device detail page):** Deferred from Batch 2. Requires a pending-commands pattern: new DB table (`pending_commands`), server endpoint (`POST /commands`), and agent changes to poll for and execute pending commands on each check-in cycle. Agent can't be reached directly from Railway (NAT). Design and build as one unit when ready.
 - **Patch by the Bushel (app detail page):** "Patch All" button is hidden. Real fan-out requires fleet-wide dispatch from the server — POST /patch once per device that has the app installed as outdated. The `patchDeviceId=null` path in `handleConfirmPatch` in `apps/[id]/page.tsx` also uses the hardcoded `INSTALLOMATOR_LABELS` map instead of the `label` field from `/apps/status`. Both must be addressed together when Patch by the Bushel is built.
 
 - GitHub PAT (orchardpatch-catalog-sync) scoped to all public repos — tighten to Installomator repo only
