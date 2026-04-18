@@ -52,3 +52,74 @@ release and Installomator catching up is by design.
 - Logs: /var/log/orchardpatch/agent.log
 
 ## Feature status
+
+### ✅ Shipped and production-ready
+- App inventory collection and display
+- Fleet view with device detail pages
+- Patch by the Fruit (individual app patching, end-to-end, verified working)
+- Patch job queue with real-time status polling
+- Patch history with expandable logs
+- Reports page with fleet health data
+- PostgreSQL persistence
+- Security hardening (parameterized queries, rate limiting, CORS)
+- app_catalog table — 1,083 Installomator labels with bundle IDs and team IDs
+  (labels now at fragments/labels/ not Labels/ in Installomator repo)
+- latest_versions table — self-populating via agent every ~2.5 hrs
+- POST /api/version-sync/ingest — agent pushes version data up additively
+- GET /api/version-sync and /api/version-sync/:label — cache lookups
+- POST /api/catalog-sync — fetches full Installomator catalog from GitHub
+- GET /api/catalog — browse/search catalog
+- GET /apps/status — returns patch_status (current/outdated/unknown) +
+  cache_age_seconds per app via latest_versions join
+- Agent src/version-checker.js — Installomator DEBUG=1 batch runner
+- Agent scheduler hook — version checks every 10 check-ins, async,
+  non-blocking (VERSION_CHECK_INTERVAL env var, default 10)
+- Post-patch version ingest — after successful patch, agent parses actual
+  installed version from Installomator output, POSTs to /ingest immediately
+  with source: "post-patch"
+- Post-patch inventory refresh — runCollection() fires after successful patch
+- 🔴/🟡/✅ status badges on inventory dashboard AppCards
+- Clickable patch status filter bar (🔴/✅/🟡 filters app list)
+- Fleet device list shows outdated count per device (via latest_versions join,
+  not legacy is_outdated field)
+- Device detail page shows real Latest version and Status columns
+- PatchStatusBadge component — reusable, hover shows latest version
+- Fleet summary bar — "🔴 N outdated · ✅ N current · 🟡 N unknown"
+- Verified end-to-end: Chrome 87.x detected → patched → 147.x confirmed
+
+### ⚠️ Partially built
+- Patch by the Bushel (fleet patching) — UI exists, bulk dispatch not wired
+  "Patch All" button on app detail has deviceId bug, do not use
+- Jamf API integration — proxy exists, real Jamf trial access pending
+- Multi-tenancy / org isolation — single-tenant only
+
+### ❌ Not yet built
+- Patch by the Orchard (policy-based auto-remediation, enterprise tier)
+- Automated catalog-sync schedule (Routine or cron — manual curl for now)
+- CLI (orchardpatch recon, patch, status, connect)
+- Homebrew tap
+- User auth / login (no auth wall yet)
+- Patch Policy UX (Silent/Notify/Scheduled/User-initiated — UI exists,
+  not persisted as policies yet)
+- Sentry / error monitoring
+- DB indexes for fleet queries
+- Version string normalization (minor version drift edge cases)
+
+## Patch naming hierarchy
+- Patch by the Fruit — single app, single device
+- Patch by the Bushel — batch/fleet patching (partially built)
+- Patch by the Orchard — policy-based auto-remediation (enterprise, future)
+
+## Patch by the Orchard vision
+Policy-based auto-remediation — "always keep Chrome within 1 version of
+latest." Enterprise tier. Needs multi-tenancy first. Version cache is the
+foundational dependency (shipped). Routines integration planned as the
+scheduling/execution layer for policy runs.
+
+## DB schema (key tables)
+- devices: id, hostname, device_id, last_seen, agent_version, agent_url (nullable)
+- apps: id, device_id, bundle_id, name, version, latest_version (legacy/null),
+  is_outdated (legacy/always 0 — do not use), installomator_label, path, source
+- latest_versions: label (PK), latest_version, last_checked, error
+- app_catalog: label (PK), app_name, bundle_id, expected_team, last_synced
+- patch_jobs: (existing)
