@@ -199,6 +199,9 @@ app.get("/devices/:id", apiRateLimit, authMiddleware, async (req, res) => {
 
 app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
   try {
+    const { device_id } = req.query;
+    const whereClause = device_id ? 'WHERE a.device_id = $1' : '';
+    const params = device_id ? [s(device_id, 100)] : [];
     const result = await pool.query(`
       SELECT
         a.id,
@@ -219,8 +222,9 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
       LEFT JOIN app_catalog ac ON ac.bundle_id = a.bundle_id
       LEFT JOIN latest_versions lv
         ON lv.label = COALESCE(a.installomator_label, ac.label)
+      ${whereClause}
       ORDER BY a.name
-    `);
+    `, params);
     res.json({ apps: result.rows });
   } catch (err) {
     console.error("[GET /apps/status]", err.message);
