@@ -102,6 +102,7 @@ Future: may add softwareupdate CLI or other sources for system app patching.
 - devices: id, hostname, device_id, last_seen, agent_version, agent_url (nullable)
 - apps: id, device_id, bundle_id, name, version, latest_version (legacy/null),
   is_outdated (legacy/always 0 — do not use), installomator_label, path, source
+  source values: 'user' (third-party, patchable), 'system' (Apple-managed, N/A)
 - latest_versions: label (PK), latest_version, last_checked, error
 - app_catalog: label (PK), app_name, bundle_id, expected_team, last_synced
 - patch_jobs: device_id, device_name (hostname via JOIN on devices), app, mode,
@@ -112,6 +113,8 @@ Future: may add softwareupdate CLI or other sources for system app patching.
 - GET /devices — fleet list with outdated_count (latest_versions join)
 - GET /apps — raw app rows (do not use for status — use /apps/status)
 - GET /apps/status?device_id= — patch status per app with cache_age_seconds
+  patch_status values: 'outdated', 'current', 'unknown', 'na'
+  'na' is returned when source = 'system' — skips latest_versions lookup entirely
 - GET /stats — fleet stats
 - POST /patch-jobs — queue a patch job
 - GET /patch-jobs — list jobs (includes device_name via JOIN on devices)
@@ -146,12 +149,14 @@ Future: may add softwareupdate CLI or other sources for system app patching.
   output, POSTs to /ingest immediately after successful patch
 - Post-patch inventory refresh — runCollection() fires after successful patch
 - Status badges on inventory dashboard AppCards
-- Clickable patch status filter bar on App Inventory page
+- Clickable patch status filter bar on App Inventory page — four pills:
+  Outdated, Current, Unknown, System
 - Fleet device list shows outdated count per device
 - Device detail page — fetches from fleet server directly, no mock data
-- Device detail page shows Outdated / Up to Date / Unknown sections
+- Device detail page shows Outdated / Up to Date / Unknown / System sections
 - App detail page — uses /apps/status (real patch_status + latest_version)
 - PatchStatusBadge component — reusable, hover shows latest version
+  Statuses: current (green), outdated (red), unknown (yellow), system (gray gear)
 - Fleet summary bar — "N outdated · N current · N unknown"
 - Patch History — records jobs with app, mode, status, duration, expandable logs
 - checkin.js — saves deviceId to /var/root/.orchardpatch/device-id.json
@@ -174,6 +179,12 @@ Future: may add softwareupdate CLI or other sources for system app patching.
 - Outdated count badge on device detail page is now a clickable filter toggle;
   active state shows ring + tint; subtitle shows × clear; empty state with
   both filters active shows "Clear filter" link (commit 06ac2a7)
+- System app classification — source column used fleet-wide:
+  Agent sets source = 'system' for dir.startsWith("/System") || bundleId.startsWith("com.apple.")
+  Server returns patch_status = 'na' for all system apps, skipping version lookup
+  Frontend excludes 'na' from outdated/unknown counts; System pill shows count separately
+  Result: unknown count reduced from 83 to ~27 (genuine third-party unknowns only)
+- Commits this session: 06865b3 (server), 2547fde + 34e53d4 (frontend), ed9eca7 (agent)
 
 ### ⚠️ Partially built
 - Patch by the Bushel (fleet patching) — UI exists, bulk dispatch not wired;
@@ -192,10 +203,9 @@ Future: may add softwareupdate CLI or other sources for system app patching.
 - Sentry / error monitoring
 - DB indexes for fleet queries
 - Version string normalization (minor version drift edge cases)
-- System app handling (Calendar, Chess, Books etc. show as Unknown —
-  should be filtered or tagged N/A)
 - Better patch job log formatting in UI
 - Force check-in button on device detail page
+- softwareupdate CLI research for system app patching (Batch 3 follow-up)
 
 ## Patch naming hierarchy
 - Patch by the Fruit — single app, single device
@@ -216,9 +226,13 @@ Future: may add softwareupdate CLI or other sources for system app patching.
 - Force check-in button — deferred (see Open Items)
 - ~~Patch Now button on outdated app rows~~ ✅ (was already correct)
 
-### Batch 3 — System apps
-- Filter or tag system apps (Calendar, Chess, Books etc.) as N/A instead of Unknown
-- Research softwareupdate CLI viability for macOS system app patching
+### Batch 3 — System apps ✅ DONE (commits 06865b3, 2547fde, 34e53d4, ed9eca7)
+- ~~System app classification — source column + com.apple.* bundle ID fix~~ ✅
+- ~~patch_status = 'na' for system apps on server~~ ✅
+- ~~System badge (gray gear), System pill in filter bar~~ ✅
+- ~~System Apps section on device detail page~~ ✅
+- Unknown: 83 → 27. System: 56. Math correct.
+- Research softwareupdate CLI viability — deferred to Not Yet Built
 
 ### Batch 4 — Polish
 - Better patch job log formatting in UI
@@ -231,14 +245,13 @@ Future: may add softwareupdate CLI or other sources for system app patching.
   server endpoint (POST /commands), and agent changes to poll for and
   execute pending commands on each check-in cycle. Agent cannot be reached
   directly from Railway (NAT). Design and build as one unit when ready.
-- **Version checker is per-device, not fleet-wide:** `buildLabelList()` in
-  version-checker.js only checks labels from the local device's inventory.
-  Apps installed on only one device have a cold-cache window of up to ~2.5
-  hours after agent restart before `latest_versions` is populated. Fix: after
-  building the local label list, fetch all labels currently seen across the
-  fleet from the server and union them in. One agent should cover the full
-  fleet label space on every version check run. Build as a discrete change
-  when ready.
+- **Fleet-aware version checker (agent):** `buildLabelList()` in version-checker.js
+  only checks labels from the local device's inventory. Apps installed on only
+  one device have a cold-cache window of up to 2.5 hours after agent restart
+  before `latest_versions` is populated. Fix: after building the local label list,
+  fetch all labels currently seen across the fleet from the server and union them
+  in. One agent should cover the full fleet label space on every version check
+  run. Build as a discrete agent change — do not work around with one-shot scripts.
 - **Patch by the Bushel (app detail page):** "Patch All" button is hidden.
   Real fan-out requires fleet-wide dispatch from the server — POST /patch
   once per device that has the app installed as outdated. The
