@@ -202,8 +202,11 @@ Future: "suggest label" UI on Unknown rows, community seed file for top 100 apps
 - Label enrichment at check-in — checkin.js now calls enrichAppsWithLabels()
   before building payload. installomator_label populated on check-in for all
   apps the agent catalog can match. Jude's device: 31 labeled, 9 genuine unknowns.
-- Verified label matches on Jude's device: firefox→ firefoxpkg, bitwarden→bitwarden,
-  microsoftteams→microsoftteams-rollingout, telegram→telegram, slack→slack
+- Verified label matches on Jude's device: firefox→ firefoxpkg, bitwarden→ bitwarden,
+  microsoftteams→ microsoftteams-rollingout, telegram→ telegram, slack→ slack
+- Version checker NOTIFY=silent fix -- added NOTIFY=silent to Installomator invocations
+  in version-checker.js to suppress macOS notifications during background version probes.
+  DEBUG=1 alone was insufficient. Patch job execution unaffected.
 
 ### Known genuine unknowns (Jude's device)
 These apps have no Installomator label and will stay Unknown until Installomator
@@ -237,6 +240,22 @@ adds support or a label override is added manually:
 - Community seed file for top 100 bundle ID → label mappings
 - SSO / proper auth (Settings > Security — placeholder passphrase auth wall
   is current implementation)
+- mas integration (Mac App Store patching) -- second patch mechanism alongside
+  Installomator. Routing: Installomator label present = patch via Installomator;
+  no label but ADAM ID present = patch via mas. Agent collects ADAM IDs via
+  mas list at check-in via a new enrichAppsWithAdamIDs() function mirroring
+  enrichAppsWithLabels(). apps table gets nullable adam_id column. latest_versions
+  extended or new mas_versions table added for App Store version tracking.
+  Resolves a chunk of current Unknown apps. Dependency: mas must be present on
+  managed devices (Homebrew install, not bundled by default).
+- AI-assisted patch approval workflows (natural language policy review,
+  approve/defer recommendations) -- downstream of multi-tenancy and Patch by the
+  Orchard policy engine. Do not build until policy engine exists and fleet data
+  is worth reasoning over.
+- Auto-generate policy documentation / MDM deployment playbooks from configured
+  patch policies -- real IT admin pain point, but only meaningful once Patch by
+  the Orchard policy engine and multi-tenancy are in place. File under Patch by
+  the Orchard deliverables.
 
 ## Patch naming hierarchy
 - Patch by the Fruit — single app, single device
@@ -282,3 +301,13 @@ adds support or a label override is added manually:
 - Version string normalization not implemented — edge case with minor builds
 - firefoxpkg label on Jude's device — verify this patches standard Firefox
   correctly (not ESR) when the time comes
+- **Version checker notifications (Installomator NOTIFY=silent incomplete):**
+  Some Installomator labels fire displaynotification unconditionally before
+  checking the NOTIFY variable. NOTIFY=silent in the OrchardPatch invocation
+  does not suppress these. No installs occur -- DEBUG=1 is working correctly --
+  but users see spurious "installation complete" notifications during background
+  version checks. Root cause is inside individual Installomator label scripts,
+  not the OrchardPatch invocation. Fix requires either parsing Installomator
+  fragments directly for version strings (bypassing Installomator invocation
+  entirely) or OS-level notification suppression during version check runs.
+  Significant effort -- defer until post-launch.
