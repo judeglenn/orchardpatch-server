@@ -323,10 +323,16 @@ app.post("/patch-jobs/branch", apiRateLimit, authMiddleware, async (req, res) =>
     for (const app of validatedApps) {
       const jobId = `branch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const now = new Date().toISOString();
+      // Insert history record into patch_jobs
       await client.query(`
         INSERT INTO patch_jobs (id, device_id, app_name, label, mode, method, status, created_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `, [jobId, s(device_id, 100), s(app.app_name), s(app.label, 100), resolvedMode, "branch", "queued", now]);
+      // Insert work item into pending_patches so the agent poller picks it up
+      await client.query(`
+        INSERT INTO pending_patches (id, device_id, label, app_name, mode, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [jobId, s(device_id, 100), s(app.label, 100), s(app.app_name), resolvedMode, now]);
       jobIds.push(jobId);
     }
     await client.query("COMMIT");
