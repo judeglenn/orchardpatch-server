@@ -97,7 +97,28 @@ async function migrate() {
   // Add agent_url to devices for existing deployments
   await pool.query(`
     ALTER TABLE devices ADD COLUMN IF NOT EXISTS agent_url TEXT;
-  `).catch(() => {}); // ignore if already exists or unsupported
+  `).catch(() => {});
+
+  // Add method column to patch_jobs (which tier triggered the job)
+  await pool.query(`
+    ALTER TABLE patch_jobs ADD COLUMN IF NOT EXISTS method TEXT NOT NULL DEFAULT 'fruit';
+  `).catch(() => {});
+
+  // Add initiated_by column to patch_jobs (placeholder until real auth)
+  await pool.query(`
+    ALTER TABLE patch_jobs ADD COLUMN IF NOT EXISTS initiated_by TEXT;
+  `).catch(() => {});
+
+  // Back-fill existing rows: anything not already tagged 'branch' was a Fruit job
+  await pool.query(`
+    UPDATE patch_jobs SET method = 'fruit' WHERE method = 'fruit' OR method IS NULL;
+  `).catch(() => {});
+
+  // Fix Branch jobs that incorrectly wrote mode='branch' -- move to method, set mode='managed'
+  await pool.query(`
+    UPDATE patch_jobs SET method = 'branch', mode = 'managed'
+    WHERE id LIKE 'branch-%' AND mode = 'branch';
+  `).catch(() => {});
 
   console.log("[DB] Schema ready");
 }

@@ -279,12 +279,17 @@ app.get("/stats", apiRateLimit, authMiddleware, async (req, res) => {
 
 // ─── Patch Jobs ───────────────────────────────────────────────────────────────
 
+const VALID_MODES = ["silent", "managed", "prompted"];
+
 // POST /patch-jobs/branch -- queue multiple patch jobs for one device (Patch by the Branch)
 app.post("/patch-jobs/branch", apiRateLimit, authMiddleware, async (req, res) => {
-  const { device_id, labels } = req.body;
+  const { device_id, labels, mode } = req.body;
 
   if (!device_id || typeof device_id !== "string") return res.status(400).json({ error: "device_id is required" });
   if (!Array.isArray(labels) || labels.length === 0) return res.status(400).json({ error: "labels must be a non-empty array" });
+
+  const resolvedMode = VALID_MODES.includes(mode) ? mode : "managed";
+  if (mode && !VALID_MODES.includes(mode)) return res.status(400).json({ error: `mode must be one of: ${VALID_MODES.join(", ")}` });
 
   // Validate device exists
   const deviceResult = await pool.query("SELECT id FROM devices WHERE id = $1", [s(device_id, 100)]);
@@ -319,9 +324,9 @@ app.post("/patch-jobs/branch", apiRateLimit, authMiddleware, async (req, res) =>
       const jobId = `branch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const now = new Date().toISOString();
       await client.query(`
-        INSERT INTO patch_jobs (id, device_id, app_name, label, mode, status, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-      `, [jobId, s(device_id, 100), s(app.app_name), s(app.label, 100), "branch", "queued", now]);
+        INSERT INTO patch_jobs (id, device_id, app_name, label, mode, method, status, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [jobId, s(device_id, 100), s(app.app_name), s(app.label, 100), resolvedMode, "branch", "queued", now]);
       jobIds.push(jobId);
     }
     await client.query("COMMIT");
@@ -344,8 +349,8 @@ app.post("/patch-jobs", apiRateLimit, authMiddleware, async (req, res) => {
 
   try {
     await pool.query(`
-      INSERT INTO patch_jobs (id, device_id, bundle_id, app_name, label, mode, status, exit_code, error, log, created_at, started_at, completed_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+      INSERT INTO patch_jobs (id, device_id, bundle_id, app_name, label, mode, method, status, exit_code, error, log, created_at, started_at, completed_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
       ON CONFLICT(id) DO UPDATE SET
         status = EXCLUDED.status,
         exit_code = EXCLUDED.exit_code,
@@ -353,7 +358,7 @@ app.post("/patch-jobs", apiRateLimit, authMiddleware, async (req, res) => {
         log = EXCLUDED.log,
         completed_at = EXCLUDED.completed_at
     `, [s(jobId, 100), s(deviceId, 100) || "unknown", s(bundleId), s(appName),
-        s(label, 100) || "", s(mode, 50) || "managed", s(status, 50) || "unknown",
+        s(label, 100) || "", s(mode, 50) || "managed", "fruit", s(status, 50) || "unknown",
         sint(exitCode), s(error, 1000),
         Array.isArray(log) ? log.join("\n").slice(0, 50000) : s(log, 50000),
         s(createdAt, 30) || new Date().toISOString(), s(startedAt, 30), s(completedAt, 30)]);
@@ -367,13 +372,25 @@ app.post("/patch-jobs", apiRateLimit, authMiddleware, async (req, res) => {
 app.get("/patch-jobs", apiRateLimit, authMiddleware, async (req, res) => {
   try {
     const limit = Math.min(sint(req.query.limit, 100), 500);
+    const filters = [];
+    const params = [];
+
+    if (req.query.device_id) { params.push(s(req.query.device_id, 100)); filters.push(`pj.device_id = $${params.length}`); }
+    if (req.query.method)    { params.push(s(req.query.method, 50));     filters.push(`pj.method = $${params.length}`); }
+    if (req.query.mode)      { params.push(s(req.query.mode, 50));       filters.push(`pj.mode = $${params.length}`); }
+    if (req.query.status)    { params.push(s(req.query.status, 50));     filters.push(`pj.status = $${params.length}`); }
+
+    const where = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    params.push(limit);
+
     const result = await pool.query(`
       SELECT pj.*, d.hostname as device_name
       FROM patch_jobs pj
       LEFT JOIN devices d ON d.id = pj.device_id
+      ${where}
       ORDER BY pj.created_at DESC
-      LIMIT $1
-    `, [limit]);
+      LIMIT $${params.length}
+    `, params);
     res.json({ jobs: result.rows });
   } catch (err) {
     console.error("[GET /patch-jobs]", err.message);
