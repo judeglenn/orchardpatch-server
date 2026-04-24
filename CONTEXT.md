@@ -98,15 +98,15 @@ Future: "suggest label" UI on Unknown rows, community seed file for top 100 apps
 
 ## Patch naming hierarchy
 - Patch by the Fruit -- single app, single device (shipped)
-- Patch by the Branch -- single app, all devices (partially built, was "Bushel")
-- Patch by the Bushel -- all outdated apps, single device (new)
+- Patch by the Branch -- all outdated apps, single device (new)
+- Patch by the Bushel -- single app, all devices (partially built, was "Branch")
 - Patch by the Orchard -- all outdated apps, entire fleet (new)
 - Cultivation -- policy-based, automated, scheduled (enterprise tier, future)
 
 ## UI homes for each tier
 - Fruit: app detail page, scoped to one device
-- Branch: app detail page, fleet-wide action
-- Bushel: device detail page, "patch all outdated on this machine"
+- Branch: device detail page, "patch all outdated on this machine"
+- Bushel: app detail page, fleet-wide action
 - Orchard: fleet dashboard, "patch all outdated everywhere"
 - Cultivation: /orchard page, Coming Soon
 
@@ -262,14 +262,14 @@ adds support or a label override is added manually:
 - Google Docs, Sheets, Slides (browser shortcuts, not real binaries)
 
 ### Partially built
-- Patch by the Branch (fleet patching, single app all devices) -- UI exists
+- Patch by the Bushel (fleet patching, single app all devices) -- UI exists
   on app detail page, "Patch All" button hidden, label source bug not fixed,
-  fan-out dispatch not wired. Was previously called "Patch by the Bushel."
+  fan-out dispatch not wired. Was previously called "Patch by the Branch."
 - Jamf API integration -- proxy exists, real Jamf trial access pending
 - Multi-tenancy / org isolation -- single-tenant only
 
 ### Not yet built
-- Patch by the Bushel (all outdated, single device) -- new tier, no UI yet.
+- Patch by the Branch (all outdated, single device) -- new tier, no UI yet.
   Lives on device detail page.
 - Patch by the Orchard (all outdated, entire fleet) -- new tier, no UI yet.
   Lives on fleet dashboard.
@@ -321,7 +321,7 @@ adds support or a label override is added manually:
   pattern: new DB table (pending_commands), server endpoint (POST /commands),
   agent changes to poll for and execute pending commands on each check-in cycle.
   Agent cannot be reached directly from Railway (NAT). Design and build as one unit.
-- **Patch by the Branch (app detail page):** "Patch All" button is hidden.
+- **Patch by the Bushel (app detail page):** "Patch All" button is hidden.
   Real fan-out requires fleet-wide dispatch from the server. The
   patchDeviceId=null path in handleConfirmPatch in apps/[id]/page.tsx also
   uses the hardcoded INSTALLOMATOR_LABELS map instead of the label field
