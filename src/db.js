@@ -120,6 +120,15 @@ async function migrate() {
     WHERE id LIKE 'branch-%' AND mode = 'branch';
   `).catch(() => {});
 
+  // Delete orphaned Branch queued jobs that have no corresponding pending_patches row
+  // These were created before the dual-write fix and will never execute
+  await pool.query(`
+    DELETE FROM patch_jobs
+    WHERE method = 'branch'
+      AND status = 'queued'
+      AND id NOT IN (SELECT id FROM pending_patches);
+  `).catch(() => {});
+
   console.log("[DB] Schema ready");
 }
 
