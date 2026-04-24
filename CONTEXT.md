@@ -350,3 +350,7 @@ adds support or a label override is added manually:
   Installomator fragments directly for version strings (bypassing Installomator
   invocation entirely) or OS-level notification suppression during version
   check runs. Significant effort -- defer until post-launch.
+- **Device typeahead in patch history (client-side only):** Current implementation fetches all devices and filters client-side. Acceptable for small fleets; needs server-side search at hundreds/thousands of devices. Defer until fleet scale warrants it.
+- **Initiated By column (patch history):** Always null — placeholder column in DB (initiated_by TEXT nullable) and UI. Wire up when SSO/real user accounts are built in Settings > Security.
+- **coconutBattery version checker:** version-checker.js returns an HTML page body instead of a version string for the `coconutbattery` label. Root cause: Installomator DEBUG=1 for this label fetches an HTML response rather than a clean version string. Needs investigation into the label's downloadURL or versionCheck method.
+- **Chrome version checker:** version-checker.js returns a date string (e.g. 2026-04-23) instead of a version number for the `googlechrome`/`chrome` label. Same root cause category as coconutBattery — wrong output being parsed as version. Investigate label's version extraction method.
