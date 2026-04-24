@@ -1,11 +1,17 @@
-# OrchardPatch — Project Context
+# OrchardPatch -- Project Context
 
-Last updated: April 18, 2026
+Last updated: April 23, 2026
 
 ## What OrchardPatch is
 A Mac admin tool providing complete visibility into managed macOS fleet apps
-and patching via Installomator — without touching your MDM. Tagline:
+and patching via Installomator -- without touching your MDM. Tagline:
 "See Everything. Patch Anything. Break Nothing."
+
+## Parent Brand (Future)
+GraftKit -- the cross-platform umbrella brand when OrchardPatch expands beyond
+macOS (Windows, Linux). OrchardPatch becomes the macOS product under the GraftKit
+family. Competing at that scale: NinjaRMM, ConnectWise, Automox.
+graftkit.com registered but parked. Focus on OrchardPatch first.
 
 ## Repos
 - Fleet server: github.com/judeglenn/orchardpatch-server
@@ -26,34 +32,34 @@ and patching via Installomator — without touching your MDM. Tagline:
 - Agent: Node.js LaunchDaemon (root), local HTTP on port 47652
 - Auth: x-orchardpatch-token header, SERVER_TOKEN env var
 
-## Environment variables (Railway — fleet server)
-- DATABASE_URL — PostgreSQL connection (Railway env ref)
-- SERVER_TOKEN — auth token for all API endpoints
-- GITHUB_TOKEN — fine-grained PAT for catalog-sync GitHub API calls
-- PORT — set by Railway
-- DATA_DIR — data directory
+## Environment variables (Railway -- fleet server)
+- DATABASE_URL -- PostgreSQL connection (Railway env ref)
+- SERVER_TOKEN -- auth token for all API endpoints
+- GITHUB_TOKEN -- fine-grained PAT for catalog-sync GitHub API calls
+- PORT -- set by Railway
+- DATA_DIR -- data directory
 
 ## Vercel environment variables (frontend)
-- LOGIN_PASSWORD — passphrase users enter to access the app
-- SESSION_SECRET — static random string stored in session cookie, validated by middleware
-- NEXT_PUBLIC_FLEET_SERVER_URL — Railway fleet server URL
-- NEXT_PUBLIC_FLEET_SERVER_TOKEN — token for direct browser-to-Railway calls
+- LOGIN_PASSWORD -- passphrase users enter to access the app
+- SESSION_SECRET -- static random string stored in session cookie, validated by middleware
+- NEXT_PUBLIC_FLEET_SERVER_URL -- Railway fleet server URL
+- NEXT_PUBLIC_FLEET_SERVER_TOKEN -- token for direct browser-to-Railway calls
 
 ## Agent environment variables
-- SERVER_URL — fleet server URL
-- SERVER_TOKEN — matches fleet server
-- INSTALLOMATOR_PATH — /usr/local/bin/Installomator.sh
-- VERSION_CHECK_INTERVAL — check-ins between version runs (default: 10)
+- SERVER_URL -- fleet server URL
+- SERVER_TOKEN -- matches fleet server
+- INSTALLOMATOR_PATH -- /usr/local/bin/Installomator.sh
+- VERSION_CHECK_INTERVAL -- check-ins between version runs (default: 10)
 
 ## Architecture decisions
 - Agent to server: REST polling only, no WebSocket
 - Server cannot reach agents directly (Railway to NAT'd agent doesn't work)
 - Version data is agent-initiated push, not server-pull
 - Agent polls every 15 min; version checks run every 10 check-ins (~2.5 hrs)
-- Patching via Installomator only — no MDM conflicts, no Secure Token needed
+- Patching via Installomator only -- no MDM conflicts, no Secure Token needed
 - Post-patch: agent immediately ingests confirmed version to latest_versions,
-  then triggers inventory check-in — no staleness window after patching
-- Vercel deploys automatically via GitHub integration on push to main — no CLI needed
+  then triggers inventory check-in -- no staleness window after patching
+- Vercel deploys automatically via GitHub integration on push to main -- no CLI needed
 - Auth wall: Next.js middleware with two-env-var design (LOGIN_PASSWORD +
   SESSION_SECRET). Placeholder until multi-tenancy is built. Real auth
   (SSO, 2FA, user management) lives in Settings > Security when built.
@@ -72,24 +78,47 @@ Installomator label yet." System means "Apple-managed, not our job."
 Future: may add softwareupdate CLI or other sources for system app patching.
 
 ## Label matching philosophy
-Bundle ID matching from fragments is not viable — bundleID is effectively
+Bundle ID matching from fragments is not viable -- bundleID is effectively
 absent from the Installomator fragment corpus. Label assignment uses a
 priority chain in the agent:
 1. Label overrides (hand-curated, /etc/orchardpatch/label-overrides.json)
 2. Agent local catalog match by bundle ID (sparse but exact where it exists)
 3. Agent local catalog match by normalized name (primary path for most apps)
-4. null — app stays Unknown
+4. null -- app stays Unknown
 Unknown means genuinely unpatchable via Installomator, not a bug.
 Future: "suggest label" UI on Unknown rows, community seed file for top 100 apps.
 
 ## Key design constraints
 - Works in BeyondTrust / privilege management environments
-- No sudo required — LaunchDaemon runs as root
-- No MDM conflicts — agent pattern same as Jamf/Mosyle/Kandji
+- No sudo required -- LaunchDaemon runs as root
+- No MDM conflicts -- agent pattern same as Jamf/Mosyle/Kandji
 - Installomator is the only patch mechanism (1,083 supported apps)
-- Single-tenant for now — multi-tenancy is a prerequisite for
-  Patch by the Orchard enterprise tier
+- Single-tenant for now -- multi-tenancy is a prerequisite for Cultivation
 - Installomator fragments now at fragments/labels/ (not Labels/) in repo
+
+## Patch naming hierarchy
+- Patch by the Fruit -- single app, single device (shipped)
+- Patch by the Branch -- single app, all devices (partially built, was "Bushel")
+- Patch by the Bushel -- all outdated apps, single device (new)
+- Patch by the Orchard -- all outdated apps, entire fleet (new)
+- Cultivation -- policy-based, automated, scheduled (enterprise tier, future)
+
+## UI homes for each tier
+- Fruit: app detail page, scoped to one device
+- Branch: app detail page, fleet-wide action
+- Bushel: device detail page, "patch all outdated on this machine"
+- Orchard: fleet dashboard, "patch all outdated everywhere"
+- Cultivation: /orchard page, Coming Soon
+
+## Pricing tiers
+- Free: Visibility only -- inventory dashboard
+- Standard: Patch by the Fruit -- individual device/app patching
+- Pro: Patch by the Bushel and Branch -- fleet patching
+- Enterprise: Cultivation -- policy-based auto-remediation
+Note: pricing model is conceptual, not yet enforced in product.
+The /orchard (Cultivation) page correctly points to an Enterprise waitlist.
+Consider a dedicated https://orchardpatch.com/enterprise landing page
+for in-app waitlist links -- warmer leads than the general homepage.
 
 ## AI development workflow
 - Primary dev assistant: Chip (OpenClaw, Claude API, has own MacBook Pro)
@@ -97,7 +126,8 @@ Future: "suggest label" UI on Unknown rows, community seed file for top 100 apps
 - Chip pushes via PAT embedded in remote URLs
 - Chip's git identity: user.name=Chip, user.email=chip@openclaw
 - orchardpatch-server has local override: Jude Glenn / judeglenn@example.com
-- Context is lost when Chip compacts — use this file to restore
+- orchardpatch-server repo is root-owned -- Chip must use sudo for all git ops
+- Context is lost when Chip compacts -- use this file to restore
 - Start Claude.ai sessions by opening OrchardPatch project (CONTEXT.md loaded)
 - End every session: ask Claude.ai to update CONTEXT.md, paste to Chip, commit
 - Standing rule: always fix bugs at root cause. Never suggest manual
@@ -107,6 +137,15 @@ Future: "suggest label" UI on Unknown rows, community seed file for top 100 apps
   debugging topology/design issues, cross-repo reasoning
 - Chip is better for: codebase-aware implementation, exact file locations,
   running commands, hot-deploying to installed agent
+
+## Go-to-market
+- Target: MacAdmins Slack (70k+ members), Jamf Nation, PSU MacAdmins
+- Distribution: bottom-up adoption, individual Mac admins champion internally
+- YC Summer 2026 application deadline: May 4, 2026 -- actively evaluating
+- Key pitch: "Jamf App Catalog shows you what you told it to track.
+  OrchardPatch shows you everything that's actually on your fleet."
+- Competitive window: 18-24 months before Jamf App Installers become a
+  real threat. Build fast.
 
 ## Fleet
 - 2 devices in production fleet
@@ -121,30 +160,30 @@ Future: "suggest label" UI on Unknown rows, community seed file for top 100 apps
 ## DB schema (key tables)
 - devices: id, hostname, device_id, last_seen, agent_version, agent_url (nullable)
 - apps: id, device_id, bundle_id, name, version, latest_version (legacy/null),
-  is_outdated (legacy/always 0 — do not use), installomator_label, path, source
+  is_outdated (legacy/always 0 -- do not use), installomator_label, path, source
   source values: 'user' (third-party, patchable), 'system' (Apple-managed, N/A)
 - latest_versions: label (PK), latest_version, last_checked, error
 - app_catalog: label (PK), app_name, bundle_id, expected_team, last_synced
-  NOTE: bundle_id is null for effectively all rows — bundleID is absent from
+  NOTE: bundle_id is null for effectively all rows -- bundleID is absent from
   Installomator fragments. app_name population requires regex fix (see tech debt).
 - patch_jobs: device_id, device_name (hostname via JOIN on devices), app, mode,
   status, duration, log output
 
 ## Key API endpoints
-- POST /checkin — agent check-in, inventory push (now includes installomator_label)
-- GET /devices — fleet list with outdated_count (latest_versions join)
-- GET /apps — raw app rows (do not use for status — use /apps/status)
-- GET /apps/status?device_id= — patch status per app with cache_age_seconds
+- POST /checkin -- agent check-in, inventory push (now includes installomator_label)
+- GET /devices -- fleet list with outdated_count (latest_versions join)
+- GET /apps -- raw app rows (do not use for status -- use /apps/status)
+- GET /apps/status?device_id= -- patch status per app with cache_age_seconds
   patch_status values: 'outdated', 'current', 'unknown', 'na'
-  'na' is returned when source = 'system' — skips latest_versions lookup entirely
-- GET /stats — fleet stats
-- POST /patch-jobs — queue a patch job
-- GET /patch-jobs — list jobs (includes device_name via JOIN on devices)
-- POST /api/version-sync/ingest — ingest version data
-- GET /api/version-sync — full version cache
-- GET /api/version-sync/:label — single label lookup
-- POST /api/catalog-sync — sync Installomator catalog from GitHub
-- GET /api/catalog — browse catalog (hard-capped at 200 rows)
+  'na' is returned when source = 'system' -- skips latest_versions lookup entirely
+- GET /stats -- fleet stats
+- POST /patch-jobs -- queue a patch job
+- GET /patch-jobs -- list jobs (includes device_name via JOIN on devices)
+- POST /api/version-sync/ingest -- ingest version data
+- GET /api/version-sync -- full version cache
+- GET /api/version-sync/:label -- single label lookup
+- POST /api/catalog-sync -- sync Installomator catalog from GitHub
+- GET /api/catalog -- browse catalog (hard-capped at 200 rows)
 
 ## Feature status
 
@@ -153,60 +192,64 @@ Future: "suggest label" UI on Unknown rows, community seed file for top 100 apps
 - Fleet view with device detail pages
 - Patch by the Fruit (individual app patching, end-to-end, verified working)
 - Patch job queue with real-time status polling
-- Patch history with expandable logs — records jobs correctly
+- Patch history with expandable logs -- records jobs correctly
 - Reports page with fleet health data
 - PostgreSQL persistence
 - Security hardening (parameterized queries, rate limiting, CORS)
-- app_catalog table — 1,083 Installomator labels synced from GitHub
-- latest_versions table — self-populating via agent every ~2.5 hrs
-- POST /api/version-sync/ingest — agent pushes version data up additively
-- GET /api/version-sync and /api/version-sync/:label — cache lookups
-- POST /api/catalog-sync — fetches full Installomator catalog from GitHub
-- GET /api/catalog — browse/search catalog
-- GET /apps/status — returns patch_status + cache_age_seconds per app,
+- app_catalog table -- 1,083 Installomator labels synced from GitHub
+- latest_versions table -- self-populating via agent every ~2.5 hrs
+- POST /api/version-sync/ingest -- agent pushes version data up additively
+- GET /api/version-sync and /api/version-sync/:label -- cache lookups
+- POST /api/catalog-sync -- fetches full Installomator catalog from GitHub
+- GET /api/catalog -- browse/search catalog
+- GET /apps/status -- returns patch_status + cache_age_seconds per app,
   filters by device_id
-- Agent src/version-checker.js — Installomator DEBUG=1 batch runner
-- Agent scheduler hook — version checks every 10 check-ins, async, non-blocking
-- Post-patch version ingest — agent parses installed version from Installomator
+- Agent src/version-checker.js -- Installomator DEBUG=1 batch runner
+- Agent scheduler hook -- version checks every 10 check-ins, async, non-blocking
+- Post-patch version ingest -- agent parses installed version from Installomator
   output, POSTs to /ingest immediately after successful patch
-- Post-patch inventory refresh — runCollection() fires after successful patch
+- Post-patch inventory refresh -- runCollection() fires after successful patch
 - Status badges on inventory dashboard AppCards
-- Clickable patch status filter bar on App Inventory page — four pills:
+- Clickable patch status filter bar on App Inventory page -- four pills:
   Outdated, Current, Unknown, System
 - Fleet device list shows outdated count per device
-- Device detail page — fetches from fleet server directly, no mock data
+- Device detail page -- fetches from fleet server directly, no mock data
 - Device detail page shows Outdated / Up to Date / Unknown / System sections
-- App detail page — uses /apps/status (real patch_status + latest_version)
-- PatchStatusBadge component — reusable, hover shows latest version
+- App detail page -- uses /apps/status (real patch_status + latest_version)
+- PatchStatusBadge component -- reusable, hover shows latest version
   Statuses: current (green), outdated (red), unknown (yellow), system (gray gear)
-- Fleet summary bar — "N outdated · N current · N unknown"
-- Patch History — records jobs with app, mode, status, duration, expandable logs
-- checkin.js — saves deviceId to /var/root/.orchardpatch/device-id.json
-- Poller — uses saved deviceId from device-id.json
-- reportPatchJob — uses saved deviceId
-- Installomator path — /usr/local/bin/Installomator.sh baked into INSTALLOMATOR_PATHS
-- Verified end-to-end: Slack 4.38.125 → 4.49.81 (Chip's Mac),
-  1Password 7.9.10 → 7.9.11 (Chip's Mac), Docker 4.54.0 → 4.69.0 (Jude's Mac)
+- Fleet summary bar -- "N outdated · N current · N unknown"
+- Patch History -- records jobs with app, mode, status, duration, expandable logs
+- checkin.js -- saves deviceId to /var/root/.orchardpatch/device-id.json
+- Poller -- uses saved deviceId from device-id.json
+- reportPatchJob -- uses saved deviceId
+- Installomator path -- /usr/local/bin/Installomator.sh baked into INSTALLOMATOR_PATHS
+- Verified end-to-end: Slack 4.38.125 -> 4.49.81 (Chip's Mac),
+  1Password 7.9.10 -> 7.9.11 (Chip's Mac), Docker 4.54.0 -> 4.69.0 (Jude's Mac)
 - HomePageInner uses /apps/status; patch_status === 'outdated' drives conflict count
-- System app classification — source column used fleet-wide
+- System app classification -- source column used fleet-wide
 - App rows on device detail page are clickable links to app detail
 - Outdated count badge on device detail page is a clickable filter toggle
-- Fleet-aware version checker (agent) — buildLabelList() now async, fetches
+- Fleet-aware version checker (agent) -- buildLabelList() now async, fetches
   all labels from /api/version-sync after building local list, unions additively.
   Falls back to local-only on fetch failure. Commit f51c69c. Both agents deployed.
-- Patch job log formatting — line-by-line rendering, scrollable 320px container,
+- Patch job log formatting -- line-by-line rendering, scrollable 320px container,
   color coded (red=error, yellow=warn, green=success), wraps long lines
-- Auth wall — Next.js middleware, LOGIN_PASSWORD + SESSION_SECRET env vars,
+- Auth wall -- Next.js middleware, LOGIN_PASSWORD + SESSION_SECRET env vars,
   httpOnly secure cookie, 7-day expiry. Protects UI shell only; fleet server
   data gate remains SERVER_TOKEN on Railway.
-- Label enrichment at check-in — checkin.js now calls enrichAppsWithLabels()
+- Label enrichment at check-in -- checkin.js now calls enrichAppsWithLabels()
   before building payload. installomator_label populated on check-in for all
   apps the agent catalog can match. Jude's device: 31 labeled, 9 genuine unknowns.
-- Verified label matches on Jude's device: firefox→ firefoxpkg, bitwarden→ bitwarden,
-  microsoftteams→ microsoftteams-rollingout, telegram→ telegram, slack→ slack
-- Version checker NOTIFY=silent fix -- added NOTIFY=silent to Installomator invocations
-  in version-checker.js to suppress macOS notifications during background version probes.
-  DEBUG=1 alone was insufficient. Patch job execution unaffected.
+- Verified label matches on Jude's device: firefox->firefoxpkg, bitwarden->bitwarden,
+  microsoftteams->microsoftteams-rollingout, telegram->telegram, slack->slack
+- Version checker NOTIFY=silent fix -- added NOTIFY=silent to Installomator
+  invocations in version-checker.js to suppress macOS notifications during
+  background version probes. DEBUG=1 alone was insufficient. Patch job execution
+  unaffected. NOTE: partially effective only -- see tech debt.
+- Cultivation page (/orchard) -- renamed from "Patch by the Orchard", updated
+  header contrast (white text on dark green), updated explainer copy to reflect
+  full five-tier naming hierarchy, Enterprise banner updated. Commit 0aca461.
 
 ### Known genuine unknowns (Jude's device)
 These apps have no Installomator label and will stay Unknown until Installomator
@@ -214,32 +257,40 @@ adds support or a label override is added manually:
 - ASUS Device Discovery
 - Avidemux
 - BlueBubbles
-- DaVinci Resolve (check — Installomator may have a label for this)
-- DisplayLinkUserAgent (x2 — driver component, not a patchable app)
+- DaVinci Resolve (check -- Installomator may have a label for this)
+- DisplayLinkUserAgent (x2 -- driver component, not a patchable app)
 - Google Docs, Sheets, Slides (browser shortcuts, not real binaries)
 
 ### Partially built
-- Patch by the Bushel (fleet patching) — UI exists, bulk dispatch not wired;
-  "Patch All" button on app detail page is hidden pending proper implementation
-- Jamf API integration — proxy exists, real Jamf trial access pending
-- Multi-tenancy / org isolation — single-tenant only
+- Patch by the Branch (fleet patching, single app all devices) -- UI exists
+  on app detail page, "Patch All" button hidden, label source bug not fixed,
+  fan-out dispatch not wired. Was previously called "Patch by the Bushel."
+- Jamf API integration -- proxy exists, real Jamf trial access pending
+- Multi-tenancy / org isolation -- single-tenant only
 
 ### Not yet built
-- Patch by the Orchard (policy-based auto-remediation, enterprise tier)
+- Patch by the Bushel (all outdated, single device) -- new tier, no UI yet.
+  Lives on device detail page.
+- Patch by the Orchard (all outdated, entire fleet) -- new tier, no UI yet.
+  Lives on fleet dashboard.
+- Cultivation / policy-based auto-remediation (enterprise tier) -- Coming Soon
+  page exists at /orchard, feature not built
 - Automated catalog-sync schedule (manual curl for now)
 - CLI (orchardpatch recon, patch, status, connect)
 - Homebrew tap
-- Patch Policy UX (Silent/Notify/Scheduled/User-initiated — UI exists,
+- Patch Policy UX (Silent/Notify/Scheduled/User-initiated -- UI exists,
   not persisted as policies yet)
 - Sentry / error monitoring
 - DB indexes for fleet queries
 - Version string normalization (minor version drift edge cases)
 - Force check-in button on device detail page
-- softwareupdate CLI research for system app patching (Batch 3 follow-up)
+- softwareupdate CLI research for system app patching
 - "Suggest label" UI on Unknown app rows
-- Community seed file for top 100 bundle ID → label mappings
-- SSO / proper auth (Settings > Security — placeholder passphrase auth wall
+- Community seed file for top 100 bundle ID -> label mappings
+- SSO / proper auth (Settings > Security -- placeholder passphrase auth wall
   is current implementation)
+- orchardpatch.com/enterprise landing page -- dedicated enterprise waitlist
+  page for in-app CTA links. Currently points to general homepage.
 - mas integration (Mac App Store patching) -- second patch mechanism alongside
   Installomator. Routing: Installomator label present = patch via Installomator;
   no label but ADAM ID present = patch via mas. Agent collects ADAM IDs via
@@ -248,24 +299,10 @@ adds support or a label override is added manually:
   extended or new mas_versions table added for App Store version tracking.
   Resolves a chunk of current Unknown apps. Dependency: mas must be present on
   managed devices (Homebrew install, not bundled by default).
-- AI-assisted patch approval workflows (natural language policy review,
-  approve/defer recommendations) -- downstream of multi-tenancy and Patch by the
-  Orchard policy engine. Do not build until policy engine exists and fleet data
-  is worth reasoning over.
-- Auto-generate policy documentation / MDM deployment playbooks from configured
-  patch policies -- real IT admin pain point, but only meaningful once Patch by
-  the Orchard policy engine and multi-tenancy are in place. File under Patch by
-  the Orchard deliverables.
-
-## Patch naming hierarchy
-- Patch by the Fruit — single app, single device
-- Patch by the Bushel — batch/fleet patching (partially built)
-- Patch by the Orchard — policy-based auto-remediation (enterprise, future)
-
-## Future UX consideration
-- App variant grouping: if Teams and Teams classic are both installed, show
-  them grouped in a fleet-wide view but tracked and patched individually.
-  Do not build yet — foundation must be solid first.
+- AI-assisted patch approval workflows -- downstream of multi-tenancy and
+  Cultivation policy engine. Do not build until policy engine exists.
+- Auto-generate policy documentation / MDM deployment playbooks -- only
+  meaningful once Cultivation and multi-tenancy are in place.
 
 ## Open items / tech debt
 - **PatchJob type mismatch:** PatchJob type declares log?: string but the
@@ -278,36 +315,38 @@ adds support or a label override is added manually:
   High value for making the catalog browsable in the UI.
 - **GET /api/catalog hard cap:** endpoint returns max 200 rows regardless of
   limit param. Fix when catalog browsing UI needs full dataset.
-- **DaVinci Resolve:** may have an Installomator label — verify and add label
+- **DaVinci Resolve:** may have an Installomator label -- verify and add label
   override if so.
 - **Force check-in button (device detail page):** Requires pending-commands
   pattern: new DB table (pending_commands), server endpoint (POST /commands),
   agent changes to poll for and execute pending commands on each check-in cycle.
   Agent cannot be reached directly from Railway (NAT). Design and build as one unit.
-- **Patch by the Bushel (app detail page):** "Patch All" button is hidden.
+- **Patch by the Branch (app detail page):** "Patch All" button is hidden.
   Real fan-out requires fleet-wide dispatch from the server. The
   patchDeviceId=null path in handleConfirmPatch in apps/[id]/page.tsx also
   uses the hardcoded INSTALLOMATOR_LABELS map instead of the label field
   from /apps/status. Both must be addressed together.
-- GitHub PAT (orchardpatch-catalog-sync) scoped to all public repos —
-  tighten to Installomator repo only
-- agent_url column on devices table unused — reserved for future
+- **orchardpatch-server root ownership:** Repo is root-owned on Chip's machine.
+  Chip must use sudo for all git ops. Low priority to fix but worth noting.
+- GitHub PAT (orchardpatch-catalog-sync) scoped to all public repos --
+  tighten to Installomator repo only. Expires May 17, 2026.
+- agent_url column on devices table unused -- reserved for future
   server-initiated flows
-- No DB indexes on fleet queries yet — will matter at scale
-- Catalog auto-sync not automated — manual curl for now
-- is_outdated field on apps table is legacy, never set by agent — ignore
-- latest_version field on apps table is legacy — latest_versions table
+- No DB indexes on fleet queries yet -- will matter at scale
+- Catalog auto-sync not automated -- manual curl for now
+- is_outdated field on apps table is legacy, never set by agent -- ignore
+- latest_version field on apps table is legacy -- latest_versions table
   is source of truth
-- Version string normalization not implemented — edge case with minor builds
-- firefoxpkg label on Jude's device — verify this patches standard Firefox
+- Version string normalization not implemented -- edge case with minor builds
+- firefoxpkg label on Jude's device -- verify this patches standard Firefox
   correctly (not ESR) when the time comes
 - **Version checker notifications (Installomator NOTIFY=silent incomplete):**
   Some Installomator labels fire displaynotification unconditionally before
   checking the NOTIFY variable. NOTIFY=silent in the OrchardPatch invocation
-  does not suppress these. No installs occur -- DEBUG=1 is working correctly --
-  but users see spurious "installation complete" notifications during background
-  version checks. Root cause is inside individual Installomator label scripts,
-  not the OrchardPatch invocation. Fix requires either parsing Installomator
-  fragments directly for version strings (bypassing Installomator invocation
-  entirely) or OS-level notification suppression during version check runs.
-  Significant effort -- defer until post-launch.
+  does not suppress these. No installs occur -- DEBUG=1 is working correctly
+  -- but users see spurious "installation complete" notifications during
+  background version checks. Root cause is inside individual Installomator
+  label scripts, not the OrchardPatch invocation. Fix requires either parsing
+  Installomator fragments directly for version strings (bypassing Installomator
+  invocation entirely) or OS-level notification suppression during version
+  check runs. Significant effort -- defer until post-launch.
