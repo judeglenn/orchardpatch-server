@@ -279,6 +279,63 @@ app.get("/stats", apiRateLimit, authMiddleware, async (req, res) => {
 
 // ─── Patch Jobs ───────────────────────────────────────────────────────────────
 
+// POST /patch-jobs/branch -- queue multiple patch jobs for one device (Patch by the Branch)
+app.post("/patch-jobs/branch", apiRateLimit, authMiddleware, async (req, res) => {
+  const { device_id, labels } = req.body;
+
+  if (!device_id || typeof device_id !== "string") return res.status(400).json({ error: "device_id is required" });
+  if (!Array.isArray(labels) || labels.length === 0) return res.status(400).json({ error: "labels must be a non-empty array" });
+
+  // Validate device exists
+  const deviceResult = await pool.query("SELECT id FROM devices WHERE id = $1", [s(device_id, 100)]);
+  if (deviceResult.rows.length === 0) return res.status(404).json({ error: "Device not found" });
+
+  // Server-side check: only insert labels that are genuinely outdated on this device
+  // Join apps -> latest_versions and compare installed vs latest version
+  const validationResult = await pool.query(`
+    SELECT a.installomator_label AS label, a.name AS app_name, a.version AS installed_version
+    FROM apps a
+    JOIN latest_versions lv ON lv.label = a.installomator_label
+    WHERE a.device_id = $1
+      AND a.installomator_label = ANY($2::text[])
+      AND lv.latest_version IS NOT NULL
+      AND lv.latest_version != ''
+      AND a.version IS NOT NULL
+      AND lv.latest_version != a.version
+  `, [s(device_id, 100), labels.map(l => s(l, 100))]);
+
+  const validatedApps = validationResult.rows;
+
+  if (validatedApps.length === 0) {
+    return res.status(400).json({ error: "No provided labels are genuinely outdated on this device" });
+  }
+
+  // Insert one row per validated label in a single transaction
+  const client = await pool.connect();
+  const jobIds = [];
+  try {
+    await client.query("BEGIN");
+    for (const app of validatedApps) {
+      const jobId = `branch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const now = new Date().toISOString();
+      await client.query(`
+        INSERT INTO patch_jobs (id, device_id, app_name, label, mode, status, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [jobId, s(device_id, 100), s(app.app_name), s(app.label, 100), "branch", "queued", now]);
+      jobIds.push(jobId);
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("[POST /patch-jobs/branch] transaction failed:", err.message);
+    return res.status(500).json({ error: "Transaction failed — no jobs were queued" });
+  } finally {
+    client.release();
+  }
+
+  res.json({ queued: jobIds.length, job_ids: jobIds });
+});
+
 app.post("/patch-jobs", apiRateLimit, authMiddleware, async (req, res) => {
   const { jobId, deviceId, bundleId, appName, label, mode, status, exitCode, error, log, createdAt, startedAt, completedAt } = req.body;
 
