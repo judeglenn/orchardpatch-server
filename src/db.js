@@ -129,6 +129,12 @@ async function migrate() {
       AND id NOT IN (SELECT id FROM pending_patches);
   `).catch(() => {});
 
+  // Delete phantom 'device-Mac' -- duplicate registration from early agent install,
+  // same device as device-GJM7N0XGL0 (Jude's MacBook Pro) with truncated hostname
+  await pool.query(`
+    DELETE FROM devices WHERE id = 'device-Mac';
+  `).catch(() => {});
+
   console.log("[DB] Schema ready");
 }
 
