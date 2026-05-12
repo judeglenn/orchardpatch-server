@@ -422,6 +422,126 @@ app.post("/patch-jobs/bushel", apiRateLimit, authMiddleware, async (req, res) =>
   res.json({ queued: jobIds.length, devices: devicesWithVersions });
 });
 
+// POST /patch-jobs/orchard -- queue patch jobs for all outdated apps across all devices (Patch by the Orchard)
+app.post("/patch-jobs/orchard", apiRateLimit, authMiddleware, async (req, res) => {
+  const { mode } = req.body;
+
+  const resolvedMode = VALID_MODES.includes(mode) ? mode : "managed";
+  if (mode && !VALID_MODES.includes(mode)) return res.status(400).json({ error: `mode must be one of: ${VALID_MODES.join(", ")}` });
+
+  // Get all devices in the fleet
+  const devicesResult = await pool.query("SELECT id, hostname FROM devices ORDER BY hostname");
+  const devices = devicesResult.rows;
+
+  if (devices.length === 0) {
+    return res.status(400).json({ error: "No devices in fleet" });
+  }
+
+  // For each device, find all outdated apps where source = 'user'
+  const deviceOutdated = [];
+  const allApps = new Map(); // Track unique apps across fleet for response
+
+  for (const device of devices) {
+    const appsResult = await pool.query(`
+      SELECT DISTINCT
+        a.installomator_label,
+        a.name AS app_name,
+        a.version AS installed_version,
+        lv.latest_version
+      FROM apps a
+      LEFT JOIN app_catalog ac ON ac.bundle_id = a.bundle_id
+      LEFT JOIN latest_versions lv ON lv.label = COALESCE(a.installomator_label, ac.label)
+      WHERE a.device_id = $1
+        AND a.source = 'user'
+        AND lv.latest_version IS NOT NULL
+        AND lv.latest_version != ''
+        AND a.version IS NOT NULL
+        AND lv.latest_version != a.version
+      ORDER BY a.name
+    `, [s(device.id, 100)]);
+
+    const outdatedApps = appsResult.rows;
+    if (outdatedApps.length > 0) {
+      deviceOutdated.push({
+        device_id: device.id,
+        hostname: device.hostname,
+        apps: outdatedApps
+      });
+
+      // Track unique apps
+      outdatedApps.forEach(app => {
+        const key = app.installomator_label;
+        if (!allApps.has(key)) {
+          allApps.set(key, { label: key, app_name: app.app_name, devices: new Set() });
+        }
+        allApps.get(key).devices.add(device.id);
+      });
+    }
+  }
+
+  // Check if there's anything to patch
+  const totalJobs = deviceOutdated.reduce((sum, d) => sum + d.apps.length, 0);
+  if (totalJobs === 0) {
+    return res.status(400).json({ error: "No outdated apps found across fleet" });
+  }
+
+  // Insert all jobs atomically
+  const client = await pool.connect();
+  const jobIds = [];
+  try {
+    await client.query("BEGIN");
+
+    for (const device of deviceOutdated) {
+      for (const app of device.apps) {
+        const jobId = `orchard-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const now = new Date().toISOString();
+
+        // Insert history record
+        await client.query(`
+          INSERT INTO patch_jobs (id, device_id, app_name, label, mode, method, status, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `, [jobId, s(device.device_id, 100), s(app.app_name), s(app.installomator_label, 100), resolvedMode, "orchard", "queued", now]);
+
+        // Insert work item for agent
+        await client.query(`
+          INSERT INTO pending_patches (id, device_id, label, app_name, mode, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `, [jobId, s(device.device_id, 100), s(app.installomator_label, 100), s(app.app_name), resolvedMode, now]);
+
+        jobIds.push(jobId);
+      }
+    }
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("[POST /patch-jobs/orchard] transaction failed:", err.message);
+    return res.status(500).json({ error: "Transaction failed — no jobs were queued" });
+  } finally {
+    client.release();
+  }
+
+  // Build response
+  const devicesResponse = deviceOutdated.map(d => ({
+    device_id: d.device_id,
+    hostname: d.hostname,
+    app_count: d.apps.length
+  }));
+
+  const appsResponse = Array.from(allApps.values()).map(app => ({
+    label: app.label,
+    app_name: app.app_name,
+    device_count: app.devices.size
+  }));
+
+  res.json({
+    queued: jobIds.length,
+    devices: devicesResponse,
+    apps: appsResponse
+  });
+});
+
+
 app.post("/patch-jobs", apiRateLimit, authMiddleware, async (req, res) => {
   const { jobId, deviceId, bundleId, appName, label, mode, status, exitCode, error, log, createdAt, startedAt, completedAt } = req.body;
 
