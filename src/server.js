@@ -347,6 +347,81 @@ app.post("/patch-jobs/branch", apiRateLimit, authMiddleware, async (req, res) =>
   res.json({ queued: jobIds.length, job_ids: jobIds });
 });
 
+// POST /patch-jobs/bushel -- queue patch jobs for one app across all outdated devices (Patch by the Bushel)
+app.post("/patch-jobs/bushel", apiRateLimit, authMiddleware, async (req, res) => {
+  const { label, mode } = req.body;
+
+  if (!label || typeof label !== "string") return res.status(400).json({ error: "label is required" });
+
+  const resolvedMode = VALID_MODES.includes(mode) ? mode : "managed";
+  if (mode && !VALID_MODES.includes(mode)) return res.status(400).json({ error: `mode must be one of: ${VALID_MODES.join(", ")}` });
+
+  // Validate label exists in latest_versions
+  const labelResult = await pool.query("SELECT label FROM latest_versions WHERE label = $1", [s(label, 100)]);
+  if (labelResult.rows.length === 0) {
+    return res.status(400).json({ error: `Label \"${label}\" not found in version catalog` });
+  }
+
+  // Query all devices where this app (by label) is outdated
+  // Join apps -> latest_versions and compare installed vs latest version
+  const devicesResult = await pool.query(`
+    SELECT DISTINCT a.device_id, a.name AS app_name, a.version AS installed_version, d.hostname
+    FROM apps a
+    JOIN latest_versions lv ON lv.label = a.installomator_label
+    JOIN devices d ON d.id = a.device_id
+    WHERE a.installomator_label = $1
+      AND a.source = 'user'
+      AND lv.latest_version IS NOT NULL
+      AND lv.latest_version != ''
+      AND a.version IS NOT NULL
+      AND lv.latest_version != a.version
+  `, [s(label, 100)]);
+
+  const outdatedDevices = devicesResult.rows;
+
+  if (outdatedDevices.length === 0) {
+    return res.status(400).json({ error: `No devices have outdated versions of label \"${label}\"` });
+  }
+
+  // Insert one job per device in a single transaction
+  const client = await pool.connect();
+  const jobIds = [];
+  try {
+    await client.query("BEGIN");
+    for (const device of outdatedDevices) {
+      const jobId = `bushel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const now = new Date().toISOString();
+      // Insert history record into patch_jobs
+      await client.query(`
+        INSERT INTO patch_jobs (id, device_id, app_name, label, mode, method, status, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [jobId, s(device.device_id, 100), s(device.app_name), s(label, 100), resolvedMode, "bushel", "queued", now]);
+      // Insert work item into pending_patches so the agent poller picks it up
+      await client.query(`
+        INSERT INTO pending_patches (id, device_id, label, app_name, mode, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [jobId, s(device.device_id, 100), s(label, 100), s(device.app_name), resolvedMode, now]);
+      jobIds.push(jobId);
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("[POST /patch-jobs/bushel] transaction failed:", err.message);
+    return res.status(500).json({ error: "Transaction failed — no jobs were queued" });
+  } finally {
+    client.release();
+  }
+
+  // Return queued count and affected devices with versions
+  const devicesWithVersions = outdatedDevices.map(d => ({
+    device_id: d.device_id,
+    hostname: d.hostname,
+    current_version: d.installed_version
+  }));
+
+  res.json({ queued: jobIds.length, devices: devicesWithVersions });
+});
+
 app.post("/patch-jobs", apiRateLimit, authMiddleware, async (req, res) => {
   const { jobId, deviceId, bundleId, appName, label, mode, status, exitCode, error, log, createdAt, startedAt, completedAt } = req.body;
 
