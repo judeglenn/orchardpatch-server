@@ -32,7 +32,7 @@ async function fetchText(url, token) {
 
 function parseFragment(content) {
   const get = (key) => {
-    const match = content.match(new RegExp(`^${key}="?([^"\\n]+)"?`, "m"));
+    const match = content.match(new RegExp(`^\\s*${key}="?([^"\\n]+)"?`, "m"));
     return match ? match[1].trim() : null;
   };
   return {
