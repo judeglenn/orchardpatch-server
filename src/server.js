@@ -618,7 +618,7 @@ app.post("/patch-jobs/:id/cancel", apiRateLimit, authMiddleware, async (req, res
     const job = jobResult.rows[0];
 
     // Step 2: Check if job is already in a terminal state
-    if (["completed", "failed", "cancelled"].includes(job.status)) {
+    if (["success", "completed", "failed", "cancelled"].includes(job.status)) {
       return res.status(409).json({
         error: `Job is already ${job.status} and cannot be cancelled`,
         status: job.status,
