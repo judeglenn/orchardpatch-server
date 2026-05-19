@@ -119,7 +119,7 @@ router.get("/", async (req, res) => {
     // Get paginated results
     const limitParam = params.length + 1;
     const offsetParam = params.length + 2;
-    const dataQuery = `SELECT * FROM app_catalog ${whereClause} ORDER BY app_name ASC LIMIT $${limitParam} OFFSET $${offsetParam}`;
+    const dataQuery = `SELECT * FROM app_catalog ${whereClause} ORDER BY app_name ASC LIMIT $` + limitParam + ` OFFSET $` + offsetParam;
     const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
 
     res.json({
