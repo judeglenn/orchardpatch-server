@@ -112,12 +112,14 @@ router.get("/", async (req, res) => {
     }
 
     // Get total count
-    const countQuery = `SELECT COUNT(*) FROM app_catalog ${whereClause}`;
+    const countQuery = `SELECT COUNT(*) as count FROM app_catalog ${whereClause}`;
     const countResult = await pool.query(countQuery, params);
     const total = parseInt(countResult.rows[0].count);
 
     // Get paginated results
-    const dataQuery = `SELECT * FROM app_catalog ${whereClause} ORDER BY app_name ASC LIMIT $` + (params.length + 1) + ` OFFSET $` + (params.length + 2);
+    const limitParam = params.length + 1;
+    const offsetParam = params.length + 2;
+    const dataQuery = `SELECT * FROM app_catalog ${whereClause} ORDER BY app_name ASC LIMIT $${limitParam} OFFSET $${offsetParam}`;
     const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
 
     res.json({
@@ -128,7 +130,7 @@ router.get("/", async (req, res) => {
       pages: Math.ceil(total / limit),
     });
   } catch (err) {
-    console.error("[catalog-sync] GET error:", err.message);
+    console.error("[catalog-sync] GET error:", err.message, err.stack);
     res.status(500).json({ error: "Failed to fetch catalog" });
   }
 });
