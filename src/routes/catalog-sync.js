@@ -95,43 +95,23 @@ router.post("/", async (req, res) => {
   res.json({ ok: true, ...results, total: labelFiles.length });
 });
 
-// GET /api/catalog-sync (or /api/catalog) — browse the catalog with pagination + search
+// GET /api/catalog-sync (or /api/catalog) — browse the catalog
 router.get("/", async (req, res) => {
   try {
-    const search = req.query.search || "";
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
-    const offset = (page - 1) * limit;
-
-    let whereClause = "";
-    const params = [];
-
-    if (search) {
-      whereClause = "WHERE app_name ILIKE $1 OR label ILIKE $1";
-      params.push(`%${search}%`);
+    const { q } = req.query;
+    let result;
+    if (q) {
+      result = await pool.query(
+        "SELECT * FROM app_catalog WHERE app_name ILIKE $1 OR label ILIKE $1 OR bundle_id ILIKE $1 ORDER BY label LIMIT 50",
+        [`%${q}%`]
+      );
+    } else {
+      result = await pool.query("SELECT * FROM app_catalog ORDER BY label LIMIT 200");
     }
-
-    // Get total count
-    const countQuery = `SELECT COUNT(*) as count FROM app_catalog ${whereClause}`;
-    const countResult = await pool.query(countQuery, params);
-    const total = parseInt(countResult.rows[0].count);
-
-    // Get paginated results
-    const limitParam = params.length + 1;
-    const offsetParam = params.length + 2;
-    const dataQuery = `SELECT * FROM app_catalog ${whereClause} ORDER BY app_name ASC LIMIT $` + limitParam + ` OFFSET $` + offsetParam;
-    const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
-
-    res.json({
-      items: dataResult.rows,
-      total,
-      page,
-      limit,
-      pages: Math.ceil(total / limit),
-    });
+    res.json({ catalog: result.rows, count: result.rows.length });
   } catch (err) {
-    console.error("[catalog-sync] GET error:", err.message, err.stack);
-    res.status(500).json({ error: "Failed to fetch catalog" });
+    console.error("[catalog-sync] GET error:", err.message);
+    res.status(500).json({ error: "DB error" });
   }
 });
 
