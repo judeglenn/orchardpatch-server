@@ -117,7 +117,7 @@ router.get("/", async (req, res) => {
     const total = parseInt(countResult.rows[0].count);
 
     // Get paginated results
-    const dataQuery = `SELECT * FROM app_catalog ${whereClause} ORDER BY app_name ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    const dataQuery = `SELECT * FROM app_catalog ${whereClause} ORDER BY app_name ASC LIMIT $` + (params.length + 1) + ` OFFSET $` + (params.length + 2);
     const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
 
     res.json({
