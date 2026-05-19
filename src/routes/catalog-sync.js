@@ -95,23 +95,41 @@ router.post("/", async (req, res) => {
   res.json({ ok: true, ...results, total: labelFiles.length });
 });
 
-// GET /api/catalog-sync (or /api/catalog) — browse the catalog
+// GET /api/catalog-sync (or /api/catalog) — browse the catalog with pagination + search
 router.get("/", async (req, res) => {
   try {
-    const { q } = req.query;
-    let result;
-    if (q) {
-      result = await pool.query(
-        "SELECT * FROM app_catalog WHERE app_name ILIKE $1 OR label ILIKE $1 OR bundle_id ILIKE $1 ORDER BY label LIMIT 50",
-        [`%${q}%`]
-      );
-    } else {
-      result = await pool.query("SELECT * FROM app_catalog ORDER BY label LIMIT 200");
+    const search = req.query.search || "";
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
+
+    let whereClause = "";
+    const params = [];
+
+    if (search) {
+      whereClause = "WHERE app_name ILIKE $1 OR label ILIKE $1";
+      params.push(`%${search}%`);
     }
-    res.json({ catalog: result.rows, count: result.rows.length });
+
+    // Get total count
+    const countQuery = `SELECT COUNT(*) FROM app_catalog ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    // Get paginated results
+    const dataQuery = `SELECT * FROM app_catalog ${whereClause} ORDER BY app_name ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    const dataResult = await pool.query(dataQuery, [...params, limit, offset]);
+
+    res.json({
+      items: dataResult.rows,
+      total,
+      page,
+      limit,
+      pages: Math.ceil(total / limit),
+    });
   } catch (err) {
     console.error("[catalog-sync] GET error:", err.message);
-    res.status(500).json({ error: "DB error" });
+    res.status(500).json({ error: "Failed to fetch catalog" });
   }
 });
 
