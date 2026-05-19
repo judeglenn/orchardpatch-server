@@ -599,6 +599,75 @@ app.get("/patch-jobs", apiRateLimit, authMiddleware, async (req, res) => {
   }
 });
 
+// Cancel a pending patch job
+app.post("/patch-jobs/:id/cancel", apiRateLimit, authMiddleware, async (req, res) => {
+  const { id } = req.params;
+  if (!id || typeof id !== "string") return res.status(400).json({ error: "ID is required" });
+
+  const client = await pool.connect();
+  try {
+    // Step 1: Look up the patch_jobs row
+    const jobResult = await client.query(
+      "SELECT id, device_id, label, status FROM patch_jobs WHERE id = $1",
+      [s(id, 100)]
+    );
+    if (jobResult.rows.length === 0) {
+      return res.status(404).json({ error: "Job not found" });
+    }
+
+    const job = jobResult.rows[0];
+
+    // Step 2: Check if job is already in a terminal state
+    if (["completed", "failed", "cancelled"].includes(job.status)) {
+      return res.status(409).json({
+        error: `Job is already ${job.status} and cannot be cancelled`,
+        status: job.status,
+      });
+    }
+
+    // Step 3: Check if a pending_patches row exists (source of truth for cancellability)
+    const pendingResult = await client.query(
+      "SELECT id FROM pending_patches WHERE id = $1",
+      [s(id, 100)]
+    );
+
+    if (pendingResult.rows.length === 0) {
+      // Job has already been picked up by agent — update status to running if still pending
+      if (job.status === "queued" || job.status === "pending") {
+        await client.query(
+          "UPDATE patch_jobs SET status = $1 WHERE id = $2",
+          ["running", s(id, 100)]
+        );
+      }
+      return res.status(409).json({
+        error: "Job has already been picked up by the agent and cannot be cancelled",
+        status: "running",
+      });
+    }
+
+    // Step 4: Job is cancellable — delete pending_patches and update patch_jobs in transaction
+    await client.query("BEGIN");
+    try {
+      await client.query("DELETE FROM pending_patches WHERE id = $1", [s(id, 100)]);
+      await client.query("UPDATE patch_jobs SET status = $1 WHERE id = $2", [
+        "cancelled",
+        s(id, 100),
+      ]);
+      await client.query("COMMIT");
+      console.log(`[Cancel] Job ${id} cancelled successfully`);
+      res.json({ success: true, message: "Job cancelled", id });
+    } catch (txErr) {
+      await client.query("ROLLBACK");
+      throw txErr;
+    }
+  } catch (err) {
+    console.error("[POST /patch-jobs/:id/cancel]", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  } finally {
+    client.release();
+  }
+});
+
 // ─── Patch Orchestration (polling model) ─────────────────────────────────────
 
 // Dashboard triggers a patch — creates a pending record agents will pick up
