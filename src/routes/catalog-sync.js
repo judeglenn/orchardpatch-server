@@ -95,23 +95,47 @@ router.post("/", async (req, res) => {
   res.json({ ok: true, ...results, total: labelFiles.length });
 });
 
-// GET /api/catalog-sync (or /api/catalog) — browse the catalog
-router.get("/", async (req, res) => {
+// GET /api/catalog-sync (or /api/catalog) — browse the catalog with pagination
+router.get('/', async (req, res) => {
   try {
-    const { q } = req.query;
-    let result;
+    var q = req.query.q ? req.query.q.trim() : '';
+    var limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    var offset = parseInt(req.query.offset) || 0;
+
+    var whereSql = '';
+    var countParams = [];
+    var dataParams = [];
+
     if (q) {
-      result = await pool.query(
-        "SELECT * FROM app_catalog WHERE app_name ILIKE $1 OR label ILIKE $1 OR bundle_id ILIKE $1 ORDER BY label LIMIT 50",
-        [`%${q}%`]
-      );
+      whereSql = ' WHERE (label ILIKE $1 OR app_name ILIKE $1)';
+      countParams = ['%' + q + '%'];
+      dataParams = ['%' + q + '%', limit, offset];
     } else {
-      result = await pool.query("SELECT * FROM app_catalog ORDER BY label LIMIT 200");
+      dataParams = [limit, offset];
     }
-    res.json({ catalog: result.rows, count: result.rows.length });
+
+    var countSql = 'SELECT COUNT(*) FROM app_catalog' + whereSql;
+    var countResult = await pool.query(countSql, countParams);
+    var total = parseInt(countResult.rows[0].count);
+
+    var dataSql;
+    if (q) {
+      dataSql = 'SELECT label, app_name, bundle_id, expected_team, last_synced FROM app_catalog WHERE (label ILIKE $1 OR app_name ILIKE $1) ORDER BY app_name ASC LIMIT $2 OFFSET $3';
+    } else {
+      dataSql = 'SELECT label, app_name, bundle_id, expected_team, last_synced FROM app_catalog ORDER BY app_name ASC LIMIT $1 OFFSET $2';
+    }
+
+    var dataResult = await pool.query(dataSql, dataParams);
+
+    res.json({
+      items: dataResult.rows,
+      total: total,
+      limit: limit,
+      offset: offset
+    });
   } catch (err) {
-    console.error("[catalog-sync] GET error:", err.message);
-    res.status(500).json({ error: "DB error" });
+    console.error('[catalog-sync] GET error:', err.message);
+    res.status(500).json({ error: 'DB error' });
   }
 });
 
