@@ -87,7 +87,8 @@ async function migrate() {
       label TEXT PRIMARY KEY,
       app_name TEXT,
       bundle_id TEXT,
-      expected_team TEXT
+      expected_team TEXT,
+      last_synced TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
     );
 
     CREATE INDEX IF NOT EXISTS idx_latest_versions_label ON latest_versions(label);
@@ -135,11 +136,17 @@ async function migrate() {
     DELETE FROM devices WHERE id = 'device-Mac';
   `).catch(() => {});
 
+  // Add last_synced column to app_catalog if it doesn't exist
+  await pool.query(`
+    ALTER TABLE app_catalog ADD COLUMN IF NOT EXISTS last_synced TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'));
+  `).catch(() => {});
+
   console.log("[DB] Schema ready");
 }
 
 migrate().catch(err => {
   console.error("[DB] Migration failed:", err.message);
+  console.error("[DB] Full error:", err);
   process.exit(1);
 });
 
