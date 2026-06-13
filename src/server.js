@@ -548,8 +548,10 @@ app.post("/patch-jobs", apiRateLimit, authMiddleware, async (req, res) => {
   if (!jobId || typeof jobId !== "string") return res.status(400).json({ error: "jobId is required" });
   if (!appName || typeof appName !== "string") return res.status(400).json({ error: "appName is required" });
 
+  const client = await pool.connect();
   try {
-    await pool.query(`
+    await client.query('BEGIN');
+    await client.query(`
       INSERT INTO patch_jobs (id, device_id, bundle_id, app_name, label, mode, method, status, exit_code, error, log, created_at, started_at, completed_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
       ON CONFLICT(id) DO UPDATE SET
@@ -557,16 +559,24 @@ app.post("/patch-jobs", apiRateLimit, authMiddleware, async (req, res) => {
         exit_code = EXCLUDED.exit_code,
         error = EXCLUDED.error,
         log = EXCLUDED.log,
+        started_at = EXCLUDED.started_at,
         completed_at = EXCLUDED.completed_at
     `, [s(jobId, 100), s(deviceId, 100) || "unknown", s(bundleId), s(appName),
         s(label, 100) || "", s(mode, 50) || "managed", "fruit", s(status, 50) || "unknown",
         sint(exitCode), s(error, 1000),
         Array.isArray(log) ? log.join("\n").slice(0, 50000) : s(log, 50000),
         s(createdAt, 30) || new Date().toISOString(), s(startedAt, 30), s(completedAt, 30)]);
+    if (status === 'success' || status === 'failed') {
+      await client.query('DELETE FROM pending_patches WHERE id = $1', [s(jobId, 100)]);
+    }
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error("[POST /patch-jobs]", err.message);
     res.status(500).json({ error: "Internal server error" });
+  } finally {
+    client.release();
   }
 });
 
