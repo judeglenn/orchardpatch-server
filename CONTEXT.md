@@ -1,6 +1,6 @@
 # OrchardPatch -- Project Context
 
-Last updated: June 12, 2026
+Last updated: June 12, 2026 (late session)
 
 ## What OrchardPatch is
 A Mac admin tool providing complete visibility into managed macOS fleet apps
@@ -64,47 +64,127 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
 - Auth wall: Next.js middleware with two-env-var design (LOGIN_PASSWORD +
   SESSION_SECRET). Placeholder until multi-tenancy is built. Real auth
   (SSO, 2FA, user management) lives in Settings > Security when built.
+- Installomator does NOT read NOTIFY, DEBUG, or other flags from the
+  environment. It sets defaults (e.g. NOTIFY=success) at the top of the
+  script, then a "rest of arguments" loop does `eval $1` on any positional
+  argument containing "=". Only positional KEY=VALUE arguments override
+  defaults -- env vars passed alongside the invocation are silently ignored
+  for these. patcher.js has always done this correctly (passes
+  NOTIFY=${mode} etc as positional args). version-checker.js did not (fixed
+  tonight, see Shipped).
 
-## Agent job execution model (IMPORTANT -- confirmed June 12)
+## CRITICAL OPEN ISSUE -- Job completion never links back to its queued row
+(found June 12, late session -- TOP PRIORITY for next session)
+
+**The bug:** In the agent's shared poll loop (`pollAndRunPatches` in
+scheduler.js), `patch.id` (the server-assigned id, shared between
+`pending_patches.id` and `patch_jobs.id` at queue time for branch/bushel/
+orchard, and now also fruit as of tonight's fix) is used ONLY for
+`claimPatch(patch.id)`. It is never passed into `runPatchJob`.
+`runPatchJob` -> `createJob` generates its own independent id:
+`job-${Date.now()}-${++jobCounter}`. `reportPatchJob` (in checkin.js) then
+POSTs `jobId: job.id` (the `job-...` id) to `POST /patch-jobs`, which does
+`INSERT ... ON CONFLICT(id) DO UPDATE`. Since `job-...` never matches the
+`patch-.../branch-.../bushel-.../orchard-...` id created at queue time, the
+upsert always INSERTs a brand-new, disconnected row instead of updating the
+"queued" one.
+
+**Impact (confirmed via DB tonight):**
+- All 23 branch/bushel/orchard patch_jobs rows that have ever existed are
+  status='cancelled', completed_at=null. None have ever reached
+  success/failed. 10 of these were the May 12 ad-hoc-test orphans (no
+  pending_patches row ever existed). The other 13 were cancelled while
+  still queued/unclaimed (claimed_at NULL), before the agent ever reached
+  them -- so this bug never got a chance to manifest for those methods,
+  they were caught earlier in the lifecycle.
+- All 35 success + 8 failed patch_jobs rows are method='fruit' with
+  `job-...` ids, created via the OLD pre-tonight flow where POST /patch
+  never created a "queued" row at all -- so the disconnected INSERT was the
+  *only* record, and "worked" by coincidence (no conflict, no orphan).
+- Tonight's Fruit two-table fix (see Shipped) created the first-ever
+  shared-id "queued" row that the agent actually claimed (Ollama test).
+  Agent crashed mid-download for an unrelated reason (see Lessons Learned),
+  leaving patch_jobs row patch-1781320769990-xj3d6t stuck at status='queued'
+  with its pending_patches row stuck at claimed_at=set. Manually cleaned up
+  (deleted the pending_patches row, then hit the cancel endpoint which
+  correctly took the "never enqueued" path and set status='cancelled').
+
+**Why this is good news, not a disaster:** it's a single fix point (the
+shared poll loop), affects all four methods identically, and has never
+caused damage before because the precondition (shared-id queued row +
+agent actually claims and runs it) never co-occurred until tonight. Caught
+before Catalog (Phase 3) would have made every single deploy hit this.
+
+**The fix (next session, in this order):**
+1. FIRST, before editing anything: search both the agent (scheduler.js,
+   checkin.js, patcher.js) and server (orchardpatch-server) for any
+   `DELETE FROM pending_patches` or equivalent endpoint. CONTEXT.md
+   previously claimed `POST /patch-jobs` "deletes the pending_patches row"
+   on completion, but the actual handler (lines 545-573) does not. Need to
+   know if pending_patches cleanup-on-completion exists ANYWHERE, or if
+   that's a second half of this same fix (completed jobs would leave stale
+   claimed rows behind otherwise -- DB clutter, not re-execution risk,
+   since fetchPendingPatches filters on claimed_at IS NULL).
+2. Thread `patch.id` through `runPatchJob` so `job.id` (or at minimum
+   whatever `reportPatchJob` sends as `jobId`) equals `patch.id`. This
+   makes the existing `ON CONFLICT(id) DO UPDATE` in POST /patch-jobs
+   correctly transition queued -> success/failed for all methods.
+3. Verify end-to-end with a small re-queue. Bitwarden is a good candidate
+   (already proven to queue correctly tonight) -- ideally pick something
+   already at latest_version so the real Installomator run is a fast
+   "already up to date" exit rather than a real download. Confirm: queued
+   row appears immediately (already working), agent claims it
+   (pending_patches.claimed_at set), agent completes, patch_jobs.status
+   transitions to success/failed on the SAME row (not a new one), and
+   pending_patches row is cleaned up.
+
+**Blocks Phase 3.** Catalog-deploy reusing POST /patch is safe from a
+validation standpoint (confirmed, no inventory checks), but would inherit
+this exact orphaning pattern at scale (1,137 labels) if built before this
+fix lands. Do not start Phase 3 until this is fixed and verified.
+
+## Two-table write pattern (CRITICAL -- read before building any patch feature)
+- pending_patches -- the agent work queue. Agent polls this table every 15 min.
+  Every patch operation MUST write here or the agent will never execute it.
+- patch_jobs -- the history/audit log. Every patch operation MUST also write
+  here for history tracking, AS OF TONIGHT this includes Fruit.
+- All four methods (fruit, branch, bushel, orchard) now create both rows
+  atomically at queue time, with patch_jobs.id = pending_patches.id,
+  status='queued'. Branch/Bushel/Orchard use an explicit transaction
+  (BEGIN/COMMIT/ROLLBACK); Fruit's POST /patch was updated tonight to match
+  this exact pattern (commit d6f0ed0).
+- THE REMAINING GAP is on the completion side, see "CRITICAL OPEN ISSUE"
+  above -- the shared id created here is never threaded through to the
+  agent's completion report, so the "queued" row never updates.
+
+## Agent job execution model (confirmed June 12, revised late session)
 - pollAndRunPatches in scheduler.js:
   1. fetchPendingPatches(deviceId) -- GET /pending-patches?device_id=...
      returns rows from pending_patches where claimed_at IS NULL
   2. claimPatch(patch.id) -- POST /pending-patches/:id/claim -- atomically
      sets claimed_at on pending_patches ONLY. Does NOT touch patch_jobs.status
      and does NOT delete the pending_patches row.
-  3. Runs runPatchJob() -> Installomator executes
-  4. waitForJob(job) -- waits for completion
-  5. reportPatchJob(job) -- POSTs result to server, which updates
-     patch_jobs.status to success or failed AND deletes the pending_patches row
-- CRITICAL: patch_jobs.status NEVER transitions to "in_progress" or "running".
-  It stays "queued" for the entire execution window, then jumps directly to
-  success/failed on completion.
-- Implication for cancel logic: a patch_jobs row with status="queued" (or any
-  non-terminal status) and NO corresponding pending_patches row can ONLY mean
-  the job was never enqueued (orphaned at insert time). It CANNOT mean "agent
-  is actively running it" -- if the agent had it, the pending_patches row
-  would still exist (with claimed_at set), since it's only deleted on
-  completion (a terminal status, caught earlier in cancel logic).
-
-## Two-table patch pattern (CRITICAL -- read before building any patch feature)
-- pending_patches -- the agent work queue. Agent polls this table every 15 min.
-  Every patch operation MUST write here or the agent will never execute it.
-- patch_jobs -- the history/audit log. Every patch operation MUST also write
-  here for history tracking.
-- Both tables must be written atomically on every patch insertion -- Fruit,
-  Branch, Bushel, Orchard all follow this pattern without exception.
-- Fruit works via POST /patch which writes to both. Branch and Bushel follow
-  the same pattern. Any future patch method must do the same or jobs will
-  queue silently forever.
-- CONFIRMED FAILURE MODE (June 12): 10 jobs from a May 12 ad-hoc curl test
-  (8 orchard, 2 bushel) were written to patch_jobs but never to pending_patches,
-  likely because the test bypassed the proper /patch-jobs/orchard endpoint.
-  These sat as status="queued" for a month, permanently unrunnable, and the
-  cancel endpoint couldn't clean them up (see Cancel endpoint fix below).
-  All 10 have now been cancelled. The /patch-jobs/orchard, /bushel, /branch,
-  /patch endpoints themselves are confirmed working correctly (atomic
-  two-table writes verified) -- this was a one-time artifact of manual testing,
-  not a recurring bug in the endpoints.
+  3. runPatchJob(label, appName, mode, deviceId) -> generates its OWN id via
+     createJob (job-<timestamp>-<counter>), completely independent of
+     patch.id. Runs Installomator.
+  4. waitForJob(job) -- polls job.status in-memory every 2s, 10min timeout
+  5. reportPatchJob(job) -- POSTs { jobId: job.id, ... } to POST /patch-jobs.
+     Because job.id != patch.id, this INSERTs a new disconnected row instead
+     of updating the "queued" row created at transaction time. See CRITICAL
+     OPEN ISSUE.
+- UNCONFIRMED: whether pending_patches row deletion on completion happens
+  anywhere. Needs checking next session as part of the fix above.
+- CRITICAL: patch_jobs.status NEVER transitions to "in_progress" or "running"
+  by design. It stays "queued" until either (a) cancelled, or (b) [currently
+  broken] the agent reports completion against the matching id.
+- Cancel logic (rewritten June 12, confirmed working tonight): a patch_jobs
+  row with non-terminal status and no corresponding pending_patches row ->
+  "never enqueued", cancels directly. A pending_patches row with claimed_at
+  set -> 409 "already picked up, not cancellable". A pending_patches row
+  with claimed_at NULL (queued, not yet claimed) -> cancels correctly,
+  deletes the pending_patches row, sets patch_jobs.status='cancelled'.
+  Confirmed tonight via live Bitwarden test (queue -> immediate "Queued" in
+  UI -> cancel -> patch_jobs.status='cancelled', pending_patches row gone).
 
 ## Version comparison philosophy
 "Latest version" in OrchardPatch = latest version Installomator knows how
@@ -151,7 +231,8 @@ Future: "suggest label" UI on Unknown rows, community seed file for top 100 apps
 - Branch: device detail page, "Patch This Device" button
 - Bushel: app detail page, "Patch All Outdated (N)" button
 - Orchard: Fleet Dashboard (/dashboard), "Patch All Outdated" card
-- Catalog: /catalog page, deploy any label to any device (in progress)
+- Catalog: /catalog page, deploy any label to any device (BLOCKED, see
+  CRITICAL OPEN ISSUE)
 - Cultivation: /orchard page, Coming Soon
 
 ## Frontend routing structure
@@ -159,7 +240,8 @@ Future: "suggest label" UI on Unknown rows, community seed file for top 100 apps
 - /dashboard -- Fleet Dashboard (homepage)
 - /apps -- App Inventory (was at / before May 12 session)
 - /apps/[id] -- App detail page
-- /catalog -- Software Catalog (in progress, backend ready as of June 12)
+- /catalog -- Software Catalog (BLOCKED, see CRITICAL OPEN ISSUE -- server
+  side ready, frontend not started)
 - /devices -- Device list
 - /devices/[id] -- Device detail page
 - /patch-history (also referenced as /patches in deployed frontend) -- Patch History
@@ -190,31 +272,20 @@ for in-app waitlist links -- warmer leads than the general homepage.
 - Architecture / planning: Claude.ai (this project)
 - Chip pushes via SSH (account-level SSH key "Chip (OpenClaw)" on GitHub)
   - Key lives at ~/.ssh/id_ed25519 on Chip's machine (user: chip)
-  - SSH push auth fixed permanently June 12: the exec environment that runs
-    git operations runs as root (/var/root/.ssh/), but Chip's key lives at
-    /Users/chip/.ssh/id_ed25519. Wrote /var/root/.ssh/config:
-      Host github.com
-        IdentityFile /Users/chip/.ssh/id_ed25519
-        StrictHostKeyChecking no
-    Verified via git ls-remote with no GIT_SSH_COMMAND override needed.
-  - NOTE: a machine reboot on June 11/12 invalidated the previous SSH key
-    registration on GitHub. Old key removed, new key added June 12. If
-    pushes start failing again after a future reboot, check this first.
+  - SSH push auth fixed permanently June 12 (see prior notes, still valid)
   - Works for all orchardpatch repos -- no per-repo deploy keys needed
   - Next PAT rotation: tighten GITHUB_TOKEN scope to Installomator repo only
 - Chip's git identity: user.name=Chip, user.email=chip@openclaw
 - orchardpatch-server has local override: Jude Glenn / judeglenn@example.com
 - File ownership on Chip's machine: run `sudo chown -R chip:staff ~/Projects`
-  if root-ownership recurs (git ops were previously run as sudo, causing this).
-  Fixed May 12 for all three repos -- standing rule: never sudo git.
+  if root-ownership recurs. Standing rule: never sudo git.
 - Edit tool fails on JS/TS files containing template literals (backticks).
   Use Python file replacement for any substantial JS/TS edits on Chip's machine.
 - CRITICAL: when using Python to write JS/TS files, avoid JS template literals
-  with dollar signs (${}). Python's string handling can mangle them. Use plain
-  string concatenation or var assignments instead. This caused a server crash
-  loop on May 19 when catalog endpoint SQL used $${} syntax.
-- Always run `npm run build` locally before pushing any new page or component.
-  Catches TypeScript and import errors before they burn a Vercel deploy.
+  with dollar signs (${}). Use plain string concatenation or var assignments.
+- Always run `npm run build` locally before pushing any new page or component
+  (frontend repo only -- agent/server are plain Node, no build step, but
+  run `node --check <file>` to confirm syntax after edits).
 - Context is lost when Chip compacts -- use this file to restore
 - Start Claude.ai sessions by opening OrchardPatch project (CONTEXT.md loaded)
 - End every session: ask Claude.ai to update CONTEXT.md, paste to Chip, commit
@@ -223,8 +294,10 @@ for in-app waitlist links -- warmer leads than the general homepage.
   explicitly as tech debt before moving on.
 - Standing rule: all fixes and updates should be resolvable through
   OrchardPatch itself. Don't suggest manual CLI commands on machines when
-  OrchardPatch should handle it (e.g., updating Installomator via the
-  catalog, not via manual curl).
+  OrchardPatch should handle it.
+- Standing rule (NEW): avoid follow-mode / non-terminating commands
+  (`tail -f`, `--follow`) in Chip prompts -- they block Chip's tool-call loop
+  until timeout. Use bounded forms (`tail -n 50`, fixed-duration checks).
 - Claude.ai is better for: architecture decisions, code scaffolding,
   debugging topology/design issues, cross-repo reasoning
 - Chip is better for: codebase-aware implementation, exact file locations,
@@ -251,15 +324,16 @@ for in-app waitlist links -- warmer leads than the general homepage.
 - Config: /etc/orchardpatch/config.json
 - Logs: /var/log/orchardpatch/agent.log
 - Device ID persisted to /var/root/.orchardpatch/device-id.json
-- Phantom "Mac" device (device-Mac) deleted via migration -- was duplicate
-  registration of Jude's Mac from pre-persistence-fix era
 - Installomator version: v10.9beta (2025-12-23) on both machines -- outdated,
-  should be updated via catalog deploy once Software Catalog page ships
-- Agent confirmed healthy June 12: 15-min inventory/check-in loop running
-  continuously, version-checker running every 10 check-ins (#280, #290
-  observed), reporting to server successfully. Agent itself is NOT the
-  source of any unwanted installs -- see Notification Storm tech debt below
-  for what it IS doing.
+  should be updated via catalog deploy once Phase 3/4 ship (BLOCKED)
+- Agent on Chip's machine confirmed stable as of tonight: PID 41881, running
+  as root, bound to 127.0.0.1:47652, clean log (inventory collected, poller
+  started, checked in successfully). See Lessons Learned for the restart
+  confusion that preceded this.
+- Known outdated apps on device-C02D52QTML85 as of tonight: Ollama
+  (0.24.0 -> 0.30.8, ~900MB, large download), Slack (4.49.89 -> 4.50.128,
+  in active use, avoid as test target), Telegram MAS (12.7 -> 12.8) and
+  Telegram Desktop (6.7.6 -> 12.8) -- see Open Items re: label mismatch.
 
 ## DB schema (key tables)
 - devices: id, hostname, device_id, last_seen, agent_version, agent_url (nullable)
@@ -268,22 +342,27 @@ for in-app waitlist links -- warmer leads than the general homepage.
   source values: 'user' (third-party, patchable), 'system' (Apple-managed, N/A)
 - latest_versions: label (PK), latest_version, last_checked, error
 - app_catalog: label (PK), app_name, bundle_id, expected_team, last_synced
-  NOTE: bundle_id is null for effectively all rows -- bundleID is absent from
-  Installomator fragments. app_name and expected_team now populated correctly
-  after May 12 regex fix (1,137 rows with real data as of June 12).
+  NOTE: bundle_id is null for effectively all rows -- 1,137 rows with real
+  app_name/expected_team data as of June 12.
 - patch_jobs: id, device_id, app_name, label, mode, method, status, created_at,
-  duration, log output
+  started_at, completed_at, exit_code, error, log
   method values: 'fruit', 'branch', 'bushel', 'orchard'
   mode values: 'silent', 'managed', 'prompted'
   status values: 'queued', 'success', 'failed', 'cancelled'
-  ('running'/'in_progress' do NOT occur in normal operation -- see Agent job
-  execution model above. A 'running' status seen June 12 was a data
-  corruption artifact from the old cancel endpoint bug, now fixed and cleared.)
+  ('running'/'in_progress' do NOT occur by design)
   initiated_by: nullable, always null until real auth exists
+  AS OF TONIGHT: all four methods create this row at queue time with
+  status='queued'. THE COMPLETION SIDE IS BROKEN for all methods, see
+  CRITICAL OPEN ISSUE. Current real DB state (as of ~9pm June 12): 35
+  success + 8 failed (all method='fruit', all from the old pre-fix flow,
+  disconnected job-... ids) + ~25 cancelled (10 from May 12 orphans, 13
+  branch/bushel/orchard cancelled-while-queued, 1 Bitwarden from tonight's
+  test, 1 Ollama orphan from tonight's test) + 0 queued.
 - pending_patches: agent work queue -- agent polls this every 15 min.
   Rows have a claimed_at column (set by claimPatch, never null once the
-  agent has picked up the job). Row is deleted only on job completion.
-  id matches patch_jobs.id (paired in dual-write)
+  agent has picked up the job). id matches patch_jobs.id for ALL methods
+  as of tonight (paired in dual-write). UNCONFIRMED whether anything
+  deletes this row on successful completion -- check next session.
 - preferences: key (PK), value (text) -- single-tenant user preferences store.
   Not yet created. Needed for Pinned Apps persistence on Dashboard.
 
@@ -293,126 +372,95 @@ for in-app waitlist links -- warmer leads than the general homepage.
 - GET /apps -- raw app rows (do not use for status -- use /apps/status)
 - GET /apps/status?device_id= -- patch status per app with cache_age_seconds
   patch_status values: 'outdated', 'current', 'unknown', 'na'
-  'na' is returned when source = 'system' -- skips latest_versions lookup entirely
 - GET /stats -- fleet stats
-- POST /patch -- queue a Fruit patch job (writes to both pending_patches and patch_jobs)
-- POST /patch-jobs/branch -- queue a Branch patch job (writes to both tables)
-  body: { device_id, labels: string[], mode: 'silent'|'managed'|'prompted' }
-  server validates each label is genuinely outdated before inserting
-  defaults mode to 'managed' if omitted
-- POST /patch-jobs/bushel -- queue a Bushel patch job (writes to both tables)
-  body: { label, mode: 'silent'|'managed'|'prompted' }
-  finds all devices where label is installed, source='user', and version is outdated
-  server validates label exists in latest_versions before querying devices
-  returns { queued: N, devices: [{ device_id, hostname, current_version }] }
-- POST /patch-jobs/orchard -- queue an Orchard patch job (writes to both tables)
-  body: { mode: 'silent'|'managed'|'prompted' }
-  finds all devices, all outdated user apps per device, queues atomically
-  method = 'orchard' on all inserted jobs
-  returns { queued: N, devices: [{ device_id, hostname, app_count }],
-            apps: [{ label, app_name, device_count }] }
-- POST /patch-jobs/:id/cancel -- cancel a pending patch job
-  REWRITTEN June 12 (see Feature status -> Shipped for details). Correctly
-  distinguishes "never enqueued" (orphaned, cancellable directly) from
-  "agent has claimed and is actively running" (409, not cancellable) using
-  pending_patches.claimed_at rather than mere row existence.
+- POST /patch -- queue a Fruit patch job. AS OF TONIGHT (commit d6f0ed0):
+  wraps both inserts in a transaction (BEGIN/COMMIT/ROLLBACK), inserts into
+  patch_jobs first (status='queued', method='fruit'), then pending_patches,
+  using the same generated id for both. No inventory/label validation --
+  accepts any label/appName, which is required for Catalog deploy to work.
+  Required body fields: deviceId, label, appName. Optional: bundleId, mode
+  (defaults 'managed'). Response: { ok, id, deviceId, label, appName,
+  createdAt } -- note field is `id` not `jobId` (frontend reads
+  `data.jobId` in handleConfirmPatch, always undefined, but this feeds
+  activeJobId which is dead code / never read, zero current impact).
+- POST /patch-jobs/branch -- queue a Branch patch job (writes to both tables,
+  transactional, validates device exists + labels genuinely outdated via
+  apps/latest_versions join before inserting)
+- POST /patch-jobs/bushel -- queue a Bushel patch job (same pattern)
+- POST /patch-jobs/orchard -- queue an Orchard patch job (same pattern)
+- POST /patch-jobs -- the AGENT's completion-report endpoint. Upserts into
+  patch_jobs via ON CONFLICT(id) DO UPDATE (status, exit_code, error, log,
+  completed_at). method is hardcoded to "fruit" regardless of caller --
+  this is fine in isolation but is irrelevant until the id-threading fix
+  lands, since the upsert currently never matches an existing row (see
+  CRITICAL OPEN ISSUE). Required: jobId, appName.
+- POST /patch-jobs/:id/cancel -- cancel a pending patch job. Confirmed
+  working correctly tonight for the "queued, not yet claimed" case (deletes
+  pending_patches row, sets patch_jobs.status='cancelled') and the "never
+  enqueued" case (orphans, sets status='cancelled' directly). The
+  "claimed_at set" case still returns 409, untested whether this is
+  reachable in practice given the completion-reporting bug (a job that's
+  claimed and actually completes never updates its queued row, so a 409
+  here would currently mean "claimed, agent crashed or still running" --
+  same ambiguity as before).
 - GET /patch-jobs -- list jobs, supports ?device_id, ?method, ?mode, ?status filters
-  LEFT JOINs devices for device_name (hostname)
 - POST /api/version-sync/ingest -- ingest version data
-- GET /api/version-sync -- full version cache
-- GET /api/version-sync/:label -- single label lookup
+- GET /api/version-sync and /api/version-sync/:label -- cache lookups
 - POST /api/catalog-sync -- sync Installomator catalog from GitHub
-- GET /api/catalog -- browse catalog
-  ?search= filters by label or app_name (FIXED June 12 -- was reading
-  req.query.q, now reads req.query.search to match frontend contract)
-  Pagination via limit/offset, total count included, no hard cap (1,137 rows
-  confirmed reachable)
+- GET /api/catalog -- browse catalog, ?search= (fixed June 12, confirmed
+  working: pagination, 1,137 total, no row cap)
 
 ## Next.js proxy routes (frontend)
+- /api/patch -- forwards to POST /patch (bundleId, label, appName, mode, deviceId)
 - /api/patch-jobs/bushel
 - /api/patch-jobs/orchard
 - /api/patch-jobs/[id]/cancel
 - /api/stats
 - /api/devices
 - /api/apps/status
-- /api/catalog -- NOT YET BUILT, needed for Phase 3 (Software Catalog page),
-  should be built proxied from the start per Phase 5 token lockdown goals
+- /api/catalog -- NOT YET BUILT (Phase 3, blocked, see CRITICAL OPEN ISSUE)
 
 ## Feature status
 
-### Shipped
-- App inventory collection and display
-- Fleet view with device detail pages
-- Patch by the Fruit (individual app patching, end-to-end, verified working)
-- Patch by the Branch (all outdated apps, single device, end-to-end verified)
-- Patch by the Bushel (single app, all outdated devices, end-to-end verified)
-- Patch by the Orchard (all outdated apps, entire fleet, end-to-end verified)
-- Patch job cancel (server + frontend, shipped May 19, REWRITTEN June 12)
-  - Original implementation (May 19) had a logic bug: when no pending_patches
-    row existed for a non-terminal job, it assumed "agent picked it up" and
-    returned 409 -- AND as a side effect flipped patch_jobs.status to "running"
-    if it was "queued", corrupting the row's status on every failed attempt.
-  - June 12 fix: per the confirmed agent execution model (claimPatch never
-    deletes pending_patches, only completion does, and completion is always
-    terminal), a missing pending_patches row + non-terminal status can only
-    mean "never enqueued." These jobs now cancel directly (status ->
-    'cancelled', nothing to delete). A pending_patches row with claimed_at set
-    correctly returns 409 "already picked up." The destructive "flip to
-    running" side effect is removed entirely.
-  - Used this fix to clear 10 orphaned jobs from a May 12 ad-hoc curl test
-    (8 orchard, 2 bushel) that had been stuck in "queued" for a month with
-    no pending_patches rows (never properly enqueued). Patch History queue
-    is now clean.
-- GET /api/catalog search fix (June 12)
-  - Route was reading req.query.q while the documented frontend contract
-    (and curl tests) use ?search=. Changed to req.query.search.
-  - Verified: ?search=firefox returns 8 firefox-family labels (firefox,
-    firefox_intl, firefoxesr, firefoxpkg, firefoxpkg_intl, etc.)
-  - Pagination, total count (1,137), and absence of the old 200-row cap all
-    confirmed working -- the May 19/20 catalog rewrite (commit 527e159,
-    deployed as of 5056d17) is fully functional. Software Catalog frontend
-    page (Phase 3) is unblocked.
-- Fleet Dashboard (/dashboard) -- homepage after login
-- App detail page
-- App Inventory moved to /apps (was at / before May 12 session)
-- Patch job queue with real-time status polling
-- Patch history with expandable logs
-- URL-driven patch history filters
-- All patch methods redirect to Patch History after queuing (Fruit fixed May 19)
-- Mode tooltips on all modals
-- Reports page with fleet health data
-- PostgreSQL persistence
-- Security hardening (parameterized queries, rate limiting, CORS)
-- app_catalog table -- 1,137 Installomator labels synced from GitHub
-- latest_versions table -- self-populating via agent every ~2.5 hrs
-- POST /api/version-sync/ingest -- agent pushes version data up additively
-- GET /api/version-sync and /api/version-sync/:label -- cache lookups
-- POST /api/catalog-sync -- fetches full Installomator catalog from GitHub
-- GET /api/catalog -- browse/search catalog (search fixed June 12)
-- GET /apps/status -- returns patch_status + cache_age_seconds per app,
-  filters by device_id
-- Agent src/version-checker.js -- Installomator DEBUG=1 batch runner
-  Now validates version strings with /^\d+\.\d/ before storing -- rejects
-  HTML responses and date strings. Deployed to Chip's machine. Needs deploy
-  to Jude's machine (see tech debt).
-  CONFIRMED RUNNING June 12: checked 44 labels twice in ~2.5hr window
-  (Check-in #280, #290), ingested results to server successfully. BUT see
-  Notification Storm tech debt -- this is the source of an active,
-  high-priority issue.
-- Agent scheduler hook -- version checks every 10 check-ins, async, non-blocking
-- Post-patch version ingest -- agent parses installed version from Installomator
-  output, POSTs to /ingest immediately after successful patch
-- Post-patch inventory refresh -- runCollection() fires after successful patch
-- Status badges on inventory dashboard AppCards
-- Clickable patch status filter bar on App Inventory page
-- Fleet device list shows outdated count per device
-- Device detail page -- fetches from fleet server directly, no mock data
-- PatchStatusBadge component -- reusable, hover shows latest version
-- Fleet summary bar -- "N outdated . N current . N unknown"
-- Patch History -- records jobs with app, mode, status, duration, expandable logs
-- Auth wall -- Next.js middleware, LOGIN_PASSWORD + SESSION_SECRET env vars
-- Label enrichment at check-in
-- Cultivation page (/orchard) -- five-tier hierarchy, Enterprise banner
+### Shipped (tonight, June 12 late session)
+- **Version checker notification storm -- FIXED.** Root cause: Installomator
+  ignores NOTIFY/DEBUG as env vars, only reads positional KEY=VALUE args
+  (eval $1 loop). version-checker.js was passing `DEBUG=1 NOTIFY=silent` as
+  a shell env-var prefix, which Installomator silently ignored, defaulting
+  to NOTIFY=success and firing "X installation/update complete!" via
+  osascript for every label where updateDetected=YES. Fixed: NOTIFY=silent
+  now passed as a positional arg (`"$path" "$label" NOTIFY=silent`), DEBUG=1
+  left in env (confirmed that part was already working). Committed 85e1b82,
+  deployed to Chip's machine, verified via manual single-label test (firefox):
+  zero osascript invocations, appNewVersion still parsed correctly. STILL
+  PENDING: deploy to Jude's machine, bundled with the existing pending
+  version-string-validation fix (HTML/malformed version rejection, committed
+  previously, only on Chip's machine). Background full-cycle confirmation
+  (next natural version-check batch, ~2.5hrs from tonight's agent restart)
+  not yet observed.
+- **Patch History StatusBadge bug -- FIXED.** 24 cancelled jobs were
+  displaying as grey "Queued" due to an implicit fallthrough default.
+  Rewrote with explicit cases for all real status values (success, failed,
+  running, queued, cancelled) plus a loud "Unknown: {status}" fallback for
+  anything unrecognized (defensive against future unhandled statuses).
+  Added "Cancelled" option to status filter dropdown. Committed e8d53e5,
+  pushed to main, Vercel auto-deployed.
+- **Fruit two-table write -- FIXED.** POST /patch now creates the patch_jobs
+  "queued" row at insert time (transactional, shared id with pending_patches),
+  matching the pattern Branch/Bushel/Orchard already used correctly at queue
+  time. Committed d6f0ed0, deployed to Railway, confirmed healthy
+  post-deploy. Verified live: Bitwarden Fruit patch -> immediately visible
+  as "Queued" in Patch History (previously invisible until agent completion)
+  -> cancel button worked -> patch_jobs.status='cancelled',
+  pending_patches row removed, confirmed via DB query.
+- GET /api/catalog search fix (carried over from earlier tonight, see prior
+  session notes) -- confirmed working, Software Catalog frontend (Phase 3)
+  is server-ready but BLOCKED on the CRITICAL OPEN ISSUE above.
+- All previously-shipped features (inventory, fleet view, Fruit/Branch/
+  Bushel/Orchard queueing, Patch History, auth wall, etc.) remain shipped
+  as before -- see prior CONTEXT.md revisions for full list. The completion-
+  reporting bug does not affect queueing or visibility of the "queued"
+  state, only the transition away from it.
 
 ### Known genuine unknowns (Jude's device)
 - ASUS Device Discovery
@@ -422,55 +470,61 @@ for in-app waitlist links -- warmer leads than the general homepage.
 - DisplayLinkUserAgent (x2 -- driver component, not a patchable app)
 - Google Docs, Sheets, Slides (browser shortcuts, not real binaries)
 
-### In progress
-- Software Catalog page (/catalog) -- browse and deploy from full Installomator
-  catalog. Server-side is now READY (search fixed June 12, pagination/count
-  confirmed working). Remaining work:
-  - Frontend: new page, searchable table, deploy modal with device selector
-    and mode picker, nav entry under Inventory
-  - Needs Next.js proxy route /api/catalog (build with non-public
-    FLEET_SERVER_TOKEN from the start, aligns with Phase 5 token lockdown)
-  - Design principle: page is "Software Catalog" not "Installomator Catalog" --
-    future-proofed for Homebrew, mas, and other package sources. Don't hardcode
-    "Installomator" in logic, only in source badges.
-  - Decide: does deploy-from-catalog reuse POST /patch (Fruit semantics)?
-    Should work since Installomator installs regardless of current presence,
-    but verify server doesn't reject labels absent from device inventory.
-- Force check-in -- designed, not yet built. See architecture section below.
+### Known label-matching issues
+- coconutBattery: label scrapes coconut-flavour.com, gets HTML back instead
+  of version string. version-checker.js rejects and stores null. Underlying
+  Installomator bug, save for maintainer outreach.
+- DaVinci Resolve: may have a label, verify and add override if so.
+- firefoxpkg: verify patches standard Firefox not ESR.
+- NEW (found tonight): "Telegram (Mac App Store)" and "Telegram Desktop" are
+  both mapped to label `telegram`, but have completely different versioning
+  schemes (12.7/12.8 for MAS vs 6.7.6 for Desktop, compared against the same
+  "latest 12.8"). Likely a label-matching mismatch, same class as the above.
+  Not yet investigated further.
+
+### In progress / Blocked
+- **Software Catalog page (/catalog) -- BLOCKED on CRITICAL OPEN ISSUE.**
+  Server-side ready (search fixed, pagination/count confirmed). Frontend not
+  started. Do not start until job-completion id-threading fix is verified,
+  see priority order below. When unblocked, design unchanged from prior
+  session: searchable table of 1,137 labels, source badges ("Installomator"
+  per row, don't hardcode in logic), deploy modal (device selector + mode
+  picker), reuses POST /patch (confirmed safe re: validation tonight).
+  New consideration added tonight: a "Force reinstall" option (uninstall
+  then install, via Installomator's UNINSTALL=1 positional arg, same
+  mechanism as NOTIFY) for apps whose own self-updater is stuck/unreliable
+  -- ties into the existing "disabling native auto-updaters" roadmap item.
+- Force check-in -- designed, not yet built (Phase 6). Note added tonight:
+  once force check-in shrinks the agent pickup window from ~15min to ~60sec,
+  revisit whether a deliberate grace-period delay is needed to preserve a
+  meaningful cancel window (currently the ~15min poll gap provides this for
+  free).
 
 ### Partially built
 - Jamf API integration -- proxy exists, real Jamf trial access pending
 - Multi-tenancy / org isolation -- single-tenant only
 
-### Not yet built
-- Force check-in / immediate agent poll -- architecture designed May 19:
-  - Split agent into fast loop (60s) and slow loop (15min)
-  - Fast loop: check pending_patches + new pending_commands table
-    (lightweight SELECTs)
-  - Slow loop: full inventory collection, version checks
-  - New table: pending_commands (id, device_id, command, created_at,
-    claimed_at, expires_at with 24hr default)
-  - New endpoints: POST /devices/:id/commands, GET /pending-commands,
-    POST /pending-commands/:id/claim
-  - Deduplication: one outstanding command per type per device
-  - Frontend: "Check In Now" button on device detail page
-  - Eliminates 15-min patch execution lag
-  - Phase 1 (server) specced, Phase 2 (agent), Phase 3 (frontend) designed
-  - Spec lives in "Cancel, Catalog, and Nine Fixes" chat (May 19) if needed
-- Patch job bulk cancel -- cancel multiple jobs at once. Lower priority now
-  that the underlying cancel endpoint correctly handles orphaned jobs and
-  the queue has been cleared; revisit if a large backlog forms again.
-- Cultivation / policy-based auto-remediation -- Coming Soon page exists
-- Pinned Apps on Dashboard -- UI empty state exists (3 ghost slots). Needs:
-  preferences table (key/value text columns), pin icon on App Inventory rows,
-  per-app mini donut widget showing current/outdated/unknown device counts.
-- Graph reports -- patch success rate over time, fleet compliance trend,
-  most patched apps, time-to-patch. Meaningful once more history data exists.
+### Not yet built (additions tonight in bold)
+- Force check-in / immediate agent poll (Phase 6, designed, see above)
+- **"Clear by status" bulk action in Patch History** -- e.g. "Clear all
+  Cancelled" / "Clear all Failed", scoped delete with confirmation. Directly
+  motivated by tonight's manual cleanups (one-off SQL + cancel-endpoint
+  combo for orphaned rows). Probably needs to be a soft-delete or at minimum
+  a confirmation step since patch_jobs is also the audit history.
+- Cultivation / policy-based auto-remediation -- Coming Soon page exists.
+  NOTE: given tonight's finding that job-completion tracking has never
+  worked end-to-end for ANY method, Cultivation's design (which presumably
+  depends on knowing whether a policy-driven patch succeeded) should be
+  revisited AFTER the completion-reporting fix lands and is verified, not
+  before.
+- Pinned Apps on Dashboard -- UI empty state exists, needs preferences table
+- Graph reports -- patch success rate over time, etc. -- meaningful only
+  once the completion-reporting fix lands (currently no jobs ever reach
+  success/failed via the correct linked path)
 - Automated catalog-sync schedule
 - CLI (orchardpatch recon, patch, status, connect)
 - Homebrew tap
-- Patch Policy UX persistence (Patch Policies section exists as informational
-  display on app detail page, not persisted as policies -- Cultivation feature)
+- Patch Policy UX persistence (Cultivation feature)
 - Sentry / error monitoring
 - DB indexes for fleet queries
 - Version string normalization
@@ -480,138 +534,95 @@ for in-app waitlist links -- warmer leads than the general homepage.
 - SSO / proper auth
 - orchardpatch.com/enterprise landing page
 - mas integration (Mac App Store patching)
-- Homebrew integration (extends Software Catalog with Homebrew source)
+- Homebrew integration
 - AI-assisted patch approval workflows
 - Auto-generate policy documentation / MDM deployment playbooks
 - History auto-refresh / periodic polling (currently manual Refresh button)
-- Server-side device typeahead (current is client-side, fine until fleet scale)
-- Light mode / Apple Business aesthetic with glass accents and OrchardPatch
-  green -- flagged as post-Orchard polish. Current hybrid (light main content,
-  dark sidebar) is a good intermediate state.
-- Cultivation page wayfinding -- page explains 5 tiers but doesn't link to
-  where each lives. Add "where to find it" links per tier.
-- Disabling native app auto-updaters (Microsoft AutoUpdate, Chrome/Edge
-  built-in updaters, etc.) once OrchardPatch manages an app, so there's one
-  source of truth for update timing instead of two systems independently
-  deciding. Future consideration, not urgent. Noted June 12 during
-  notification storm investigation -- native auto-updaters were ruled OUT
-  as the cause of that issue, but remain a real product consideration.
+- Server-side device typeahead
+- Light mode / Apple Business aesthetic
+- Cultivation page wayfinding (link each tier to where it lives in the UI)
+- Disabling native app auto-updaters once OrchardPatch manages an app --
+  reinforced tonight by the Ollama "reopen to update" anecdote (native
+  updater silently failed; OrchardPatch's forced reinstall would be the
+  recovery path)
 
 ## Open items / tech debt
 
-### HIGH PRIORITY -- Version checker notification storm (found June 12)
-The agent's version-checker runs every ~10 check-ins (~2.5 hrs) across all
-44 catalog labels (13 local + 31 fleet-only) using `DEBUG=1 NOTIFY=silent`.
-DEBUG correctly prevents actual installation (confirmed: notification-listed
-apps like Microsoft Edge are NOT present in /Applications on Jude's machine).
-However, Installomator's displaynotification "X installation/update complete!"
-message fires anyway for most/all labels, via osascript -> ScriptEditor2,
-producing a burst of misleading "installation complete" notifications on
-Jude's actual daily-driver machine.
-
-CONFIRMED June 12 via `sudo log show --predicate 'eventMessage CONTAINS
-"osascript"' --last 4h --style compact`: a burst of ~26 osascript invocations
-from 17:50:30 to 17:53:52 (one every 5-15 seconds), matching the agent.log's
-"Check-in #290 -- triggering version check batch" (44 labels, concurrency 5)
-exactly in timing and rough count.
-
-This previously had a much milder tech debt entry ("some labels fire
-displaynotification unconditionally, defer until post-launch") that
-understated the severity -- this fires on essentially every label, every
-~2.5 hours, on a real user's machine, with deceptive completion text for
-apps that were never touched.
-
-NEXT SESSION SHOULD START HERE, before Phase 3. Diagnostic path:
-1. Read version-checker.js's exact Installomator invocation -- the literal
-   env vars/flags passed (DEBUG=1 NOTIFY=silent as written vs. as exported
-   to the subprocess)
-2. Find where Installomator's displaynotification function is called for the
-   final "installation/update complete" message, and what condition (if any)
-   gates it on NOTIFY
-3. Determine whether DEBUG=1 should suppress this notification too, or
-   whether NOTIFY=silent needs different handling for this specific call
-4. Root-cause fix, redeploy to both machines, verify next version-check
-   cycle is silent
+### TOP PRIORITY -- see "CRITICAL OPEN ISSUE" section above
+Job-completion id-threading fix. Blocks Phase 3 and meaningfully affects
+Cultivation design. Well-scoped, single fix point, affects all methods.
 
 ### Other open items
-- **Patch history sort order:** jobs within day groupings may not be sorted
-  by time -- ORIGINAL DIAGNOSIS INCONCLUSIVE (June 12). The filteredJobs sort
-  comparator (startedAt descending, with createdAt fallback for null
-  startedAt) looked structurally correct on inspection, and the component
-  has NO date-grouping UI at all currently (renders flat), so "jobs within
-  day groupings" doesn't map to current code. Cannot visually verify because
-  the Started column shows relative time ("1mo ago") at too coarse a
-  granularity. PARKED until Phase 4 generates fresh patch jobs with varied,
-  recent timestamps to actually test against. If still relevant, re-test
-  with real data before writing any fix.
-- **Cancel button UX:** cancel button is at far right of row, status badge
-  is in the middle. Spatial disconnect makes it hard to see the status change.
-  Consider inline cancel icon next to status badge, or making status badge
-  itself clickable for cancellable jobs. Design pass needed.
-- **Canva patch failure:** Installomator exits with code 23 for canva label.
-  Installomator version on both machines is v10.9beta (2025-12-23) -- over
-  5 months old. Fix: update Installomator via Software Catalog page
-  (self-update using 'installomator' label) once Phase 3/4 ship.
-- **coconutBattery version string:** Installomator label scrapes
-  coconut-flavour.com and gets HTML back instead of a version string.
-  version-checker.js now rejects the result and stores null. Underlying
-  label issue is an Installomator bug -- save for maintainer outreach.
-- **version-checker.js deploy to Jude's machine:** validation fix committed
-  and deployed to Chip's machine only. Should be deployable via OrchardPatch
-  agent self-update mechanism when built. NOTE: this is now entangled with
-  the notification storm investigation above -- whatever fix comes out of
-  that should be deployed to both machines together with this existing fix.
-  Manual steps if needed urgently:
-  cd ~/Projects/orchardpatch-agent && git pull
-  sudo cp src/version-checker.js /usr/local/orchardpatch/agent/src/version-checker.js
-  sudo launchctl kickstart -k system/com.orchardpatch.agent
+- **version-checker.js deploy to Jude's machine:** TWO fixes now pending for
+  this file (notification-storm fix from tonight + the earlier HTML/
+  malformed-version-string validation fix), both only on Chip's machine.
+  Bundle and deploy together.
 - **Initiated By column:** always null until real user accounts exist.
-  Wire up when SSO/auth is built.
-- **DaVinci Resolve:** may have an Installomator label -- verify and add
-  label override if so.
-- **GitHub PAT (GITHUB_TOKEN):** renewed May 12, 2026. Still scoped to all
-  public repos -- tighten to Installomator repo only at next rotation.
+- **GitHub PAT (GITHUB_TOKEN):** renewed May 12, 2026, scoped to all public
+  repos -- tighten to Installomator repo only at next rotation.
 - **agent_url column:** unused, reserved for future server-initiated flows.
 - **No DB indexes** on fleet queries yet.
 - **Catalog auto-sync** not automated.
-- **is_outdated field:** legacy, never set -- ignore.
-- **latest_version field on apps table:** legacy -- latest_versions is
-  source of truth.
-- **firefoxpkg label:** verify patches standard Firefox not ESR.
-- **Server-side device typeahead:** current typeahead fetches all devices
-  client-side. Needs server-side search at fleet scale (hundreds+ devices).
-- **Dashboard --foreground override:** --foreground CSS var is #f0f8ec (light
-  cream for dark theme). Dashboard explicitly uses text-gray-900/text-gray-600
-  to override. Proper fix is a light/dark mode system -- deferred to light
-  mode polish pass.
+- **is_outdated field / legacy latest_version on apps table:** ignore, see
+  Version comparison philosophy.
+- **Server-side device typeahead:** needs server-side search at fleet scale.
+- **Dashboard --foreground override:** deferred to light mode polish pass.
+- **Telegram label mismatch:** see Known label-matching issues above.
+- **launchctl status can be misleading:** tonight, `launchctl list` showed
+  exit code -15 (SIGTERM) and runs=3 for the agent, which looked like a
+  crash loop, but `ps aux` confirmed a single healthy PID was actually
+  running. The -15/runs count reflects the PREVIOUS run's exit, not current
+  state. Multiple overlapping `kickstart -k` calls during testing caused
+  EADDRINUSE collisions that added to the confusion. Agent itself was fine
+  throughout. Don't over-trust `launchctl list` in isolation, confirm with
+  `ps aux` for the actual current PID.
+- **"Claimed but abandoned" jobs have no recovery path:** if the agent
+  claims a pending_patches row (sets claimed_at) and then crashes/restarts
+  before completing, that row is permanently stuck -- not re-fetchable
+  (claimed_at is set), not cancellable (409 on claimed jobs). Tonight's
+  Ollama orphan was manually cleaned up (delete pending_patches row, then
+  cancel endpoint). This is a real robustness gap, likely a Phase 6 (Force
+  check-in) design consideration -- e.g. a staleness timeout on claimed_at.
 
 ## Next session priority order
-1. Version checker notification storm (HIGH PRIORITY, see tech debt above) --
-   diagnose version-checker.js's Installomator invocation + Installomator's
-   displaynotification gating logic, fix, deploy to both machines
-2. Phase 3: Software Catalog frontend page (/catalog) -- server search is
-   fixed and ready, build the page + /api/catalog proxy (non-public token)
-3. Phase 4: Installomator self-update via catalog (depends on Phase 3),
-   re-test Canva patch afterward
-4. Phase 5: Token lockdown (NEXT_PUBLIC_FLEET_SERVER_TOKEN removal)
-5. Phase 6: Force check-in Phases 1-2
-6. Revisit patch history sort question with fresh data from Phase 4
+1. **TOP PRIORITY: Job-completion id-threading fix.** First, search for any
+   existing pending_patches deletion-on-completion mechanism (agent or
+   server) -- if none exists, that's part of this fix too. Then thread
+   patch.id through pollAndRunPatches -> runPatchJob -> reportPatchJob for
+   all methods. Verify end-to-end with a small re-queue (Bitwarden or
+   similar, ideally something already at latest_version for a fast no-op
+   run): confirm queued -> success/failed transitions on the SAME row, and
+   pending_patches is cleaned up.
+2. Once #1 is verified: Phase 3, Software Catalog frontend page (/catalog).
+   Server-side ready. Include the "Force reinstall" (uninstall+install)
+   option in the deploy modal design.
+3. Phase 4: Installomator self-update via catalog on both machines, re-test
+   Canva (exit code 23, stale Installomator v10.9beta).
+4. Phase 5: Token lockdown (remove NEXT_PUBLIC_FLEET_SERVER_TOKEN).
+5. Phase 6: Force check-in. Revisit the cancellation-window question here
+   (deliberate grace period vs relying on poll interval).
+6. Jude's machine: bundle-deploy version-checker.js fixes (notification
+   storm + validation), and any agent-side changes from #1, in one pass.
+7. Patch History "Clear by status" bulk action -- low priority, nice-to-have,
+   whenever there's a natural frontend batching opportunity.
 
-## Lessons learned (June 12 session)
-- The agent's job execution model has NO "in_progress" status -- patch_jobs
-  stays "queued" through the entire execution window. Any cancel/status logic
-  must account for this; "no pending_patches row" is NOT evidence of "agent
-  has it," only completion (terminal status) or never-enqueued (orphaned)
-  produce that state.
-- When a "fixed" feature appears to misbehave again, verify with real
-  evidence (system logs with timestamps) before either dismissing it or
-  assuming the worst. Two false starts happened here (first "it's fine,"
-  then "it's stale notifications") before the osascript timestamp correlation
-  gave a real answer.
-- `sudo log show --predicate` against the unified log, filtered by the actual
-  mechanism (osascript, in this case) rather than the suspected script name
-  (Installomator), was the key diagnostic. The unified log captures far more
-  than application-specific log files.
-- Two production root-cause fixes (catalog search param, cancel endpoint
-  state logic) were both one-line-to-small-function changes once properly
-  diagnosed -- the diagnose-first workflow paid off on both.
+## Lessons learned (June 12 late session)
+- The single most valuable pattern tonight, again: verify documented
+  architecture against actual code before building on it. CONTEXT.md's
+  claims about Fruit's two-table write and about POST /patch-jobs deleting
+  pending_patches were both wrong (or at least unverified), discovered only
+  by reading the real handlers and tracing a live test through the DB.
+- "End-to-end verified" in prior session notes likely meant "the app
+  actually updated on disk," checked manually -- not "the DB record
+  completed correctly." These are different claims; the second one has
+  apparently never been true for any method.
+- A bug can exist in shared code for a long time without symptoms if the
+  precondition for triggering it never occurs. Branch/Bushel/Orchard's
+  queued rows were always cancelled before the agent claimed them, so the
+  id-mismatch bug never fired. Tonight's Fruit fix was the first time the
+  precondition was met.
+- `launchctl list`'s exit-code/runs fields reflect history, not current
+  state -- always confirm with `ps aux` for the actual running PID before
+  concluding a daemon is down.
+- Avoid follow-mode commands (`tail -f`) in Chip prompts -- they block the
+  tool-call loop with no natural exit.
