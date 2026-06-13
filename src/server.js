@@ -627,23 +627,28 @@ app.post("/patch-jobs/:id/cancel", apiRateLimit, authMiddleware, async (req, res
 
     // Step 3: Check if a pending_patches row exists (source of truth for cancellability)
     const pendingResult = await client.query(
-      "SELECT id FROM pending_patches WHERE id = $1",
+      "SELECT id, claimed_at FROM pending_patches WHERE id = $1",
       [s(id, 100)]
     );
 
     if (pendingResult.rows.length === 0) {
-      // Job has already been picked up by agent — update status to running if still pending
-      if (job.status === "queued" || job.status === "pending") {
-        await client.query(
-          "UPDATE patch_jobs SET status = $1 WHERE id = $2",
-          ["running", s(id, 100)]
-        );
-      }
+      // No pending_patches row + non-terminal status means this job was never
+      // enqueued (the agent's claim flow only sets claimed_at, it never deletes
+      // the row until completion, which would be a terminal status caught in
+      // Step 2). This is an orphaned job, safe to cancel directly.
+      await client.query("UPDATE patch_jobs SET status = $1 WHERE id = $2", ["cancelled", s(id, 100)]);
+      return res.json({ success: true, message: "Job was never enqueued and has been cancelled", id });
+    }
+
+    const pendingRow = pendingResult.rows[0];
+    if (pendingRow.claimed_at) {
       return res.status(409).json({
         error: "Job has already been picked up by the agent and cannot be cancelled",
-        status: "running",
+        status: job.status,
       });
     }
+
+    // else: pending_patches row exists, not yet claimed, fall through to Step 4
 
     // Step 4: Job is cancellable — delete pending_patches and update patch_jobs in transaction
     await client.query("BEGIN");
