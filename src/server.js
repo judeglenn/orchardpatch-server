@@ -685,19 +685,33 @@ app.post("/patch", apiRateLimit, authMiddleware, async (req, res) => {
 
   const id = `patch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const createdAt = new Date().toISOString();
+  const resolvedMode = s(mode, 50) || "managed";
 
+  const client = await pool.connect();
   try {
-    await pool.query(`
+    await client.query("BEGIN");
+
+    await client.query(`
+      INSERT INTO patch_jobs (id, device_id, app_name, label, mode, method, status, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `, [id, s(deviceId, 100), s(appName), s(label, 100), resolvedMode, "fruit", "queued", createdAt]);
+
+    await client.query(`
       INSERT INTO pending_patches (id, device_id, bundle_id, label, app_name, mode, created_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7)
-    `, [id, s(deviceId, 100), s(bundleId), s(label, 100), s(appName), s(mode, 50) || "managed", createdAt]);
+    `, [id, s(deviceId, 100), s(bundleId), s(label, 100), s(appName), resolvedMode, createdAt]);
 
-    console.log(`[Patch] Queued ${label} for ${deviceId}`);
-    res.json({ ok: true, id, deviceId, label, appName, createdAt });
+    await client.query("COMMIT");
   } catch (err) {
+    await client.query("ROLLBACK");
     console.error("[POST /patch]", err.message);
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
+  } finally {
+    client.release();
   }
+
+  console.log(`[Patch] Queued ${label} for ${deviceId}`);
+  res.json({ ok: true, id, deviceId, label, appName, createdAt });
 });
 
 // Agents poll this to find pending work for their device
