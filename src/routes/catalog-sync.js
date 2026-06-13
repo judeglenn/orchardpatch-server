@@ -98,7 +98,7 @@ router.post("/", async (req, res) => {
 // GET /api/catalog-sync (or /api/catalog) — browse the catalog with pagination
 router.get('/', async (req, res) => {
   try {
-    var q = req.query.q ? req.query.q.trim() : '';
+    var q = req.query.search ? req.query.search.trim() : '';
     var limit = Math.min(parseInt(req.query.limit) || 50, 200);
     var offset = parseInt(req.query.offset) || 0;
 
