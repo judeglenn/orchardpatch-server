@@ -639,3 +639,9 @@ and version checker verification before anything else.
   verification step costs up to 15 minutes. At 2-3 verifications per feature,
   that's 30-45 minutes of waiting per session. It should have been built
   before Phase 4.
+## Late addition (June 16 17:44)
+- Poller confirmed: DB count stayed 0/45 through 17:40 PT despite spawnSync fix deployed.
+- spawnSync works correctly in isolation (sudo node test showed versions resolving).
+- The 0/45 in daemon context suggests ingest is either not firing or failing silently.
+- Next session: add explicit logging to ingestToServer, or test runVersionCheck end-to-end
+  as root with full verbose output before diagnosing further.
