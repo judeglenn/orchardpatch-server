@@ -45,7 +45,11 @@ router.post("/ingest", async (req, res) => {
         INSERT INTO latest_versions (label, latest_version, last_checked, error)
         VALUES ($1, $2, $3, $4)
         ON CONFLICT(label) DO UPDATE SET
-          latest_version = EXCLUDED.latest_version,
+          latest_version = CASE
+            WHEN EXCLUDED.latest_version IS NOT NULL AND EXCLUDED.latest_version <> ''
+            THEN EXCLUDED.latest_version
+            ELSE latest_versions.latest_version
+          END,
           last_checked   = EXCLUDED.last_checked,
           error          = EXCLUDED.error
       `, [
