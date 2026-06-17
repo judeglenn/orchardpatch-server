@@ -1,6 +1,6 @@
 # OrchardPatch -- Project Context
 
-Last updated: June 13, 2026
+Last updated: June 16, 2026
 
 ## What OrchardPatch is
 A Mac admin tool providing complete visibility into managed macOS fleet apps
@@ -21,7 +21,8 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
   - Local: ~/Projects/orchardpatch-agent
 - Web app (frontend): github.com/judeglenn/orchardpatch
   - Local: ~/Projects/orchardpatch
-  - Deployed: https://orchardpatch.vercel.app
+  - Deployed: https://app.orchardpatch.com (primary)
+              https://orchardpatch.vercel.app (alias, still active)
 - Waitlist: github.com/judeglenn/orchardpatch-waitlist
 - Marketing: https://orchardpatch.com
 
@@ -43,18 +44,38 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
 - LOGIN_PASSWORD -- passphrase users enter to access the app
 - SESSION_SECRET -- static random string stored in session cookie, validated
   by middleware
-- NEXT_PUBLIC_FLEET_SERVER_URL -- Railway fleet server URL
-- NEXT_PUBLIC_FLEET_SERVER_TOKEN -- token for browser-to-proxy calls
-  NOTE: Phase 5 (token lockdown) will replace both NEXT_PUBLIC vars with
-  server-side-only FLEET_SERVER_URL and FLEET_SERVER_TOKEN. NEXT_PUBLIC vars
-  still ship in the browser bundle as of June 13. Hard gate before sharing
-  the deployed URL with anyone outside Jude and Chip.
+- FLEET_SERVER_URL -- Railway fleet server URL (non-public, server-side only)
+- FLEET_SERVER_TOKEN -- token for proxy-to-fleet-server calls (non-public,
+  server-side only, saved as sensitive in Vercel -- cannot be read back from UI)
+  NOTE: Phase 5 complete as of June 16. NEXT_PUBLIC_ vars removed. Token
+  confirmed absent from browser bundle. All fleet calls go through proxy layer.
+  Token rotation note: save new token value in password manager before rotating
+  -- Vercel sensitive vars cannot be retrieved after saving.
 
 ## Agent environment variables
 - SERVER_URL -- fleet server URL
 - SERVER_TOKEN -- matches fleet server
-- INSTALLOMATOR_PATH -- /usr/local/bin/Installomator.sh
 - VERSION_CHECK_INTERVAL -- check-ins between version runs (default: 10)
+  NOTE: INSTALLOMATOR_PATH is NOT an env var -- agent discovers Installomator
+  by checking a path list in order. See Installomator path section below.
+  IMPORTANT: VERSION_CHECK_INTERVAL=1 was temporarily set in Chip's machine
+  plist for testing (June 16). Must be removed and agent restarted at start
+  of next session to restore normal 2.5hr cycle.
+
+## Installomator path and version
+- Canonical pkg-managed path: /usr/local/Installomator/Installomator.sh
+  This is where the Installomator pkg (deployed via catalog) installs.
+- Legacy manual path: /usr/local/bin/Installomator.sh (do not rely on this)
+- patcher.js INSTALLOMATOR_PATHS order (commit 8ad966f): pkg path first,
+  /usr/local/bin/ second. This means catalog-managed updates take precedence.
+- version-checker.js already had correct order before June 16.
+- Current version on both machines: v10.8 (2025-03-28) -- stable release.
+  Installed via catalog deploy June 16, replacing v10.9beta.
+- The Installomator label in Installomator itself points to v10.8 pkg.
+  v10.9beta (main branch) is what catalog sync pulls fragment data from.
+  v10.8 (release branch) is the stable installed binary.
+- OrchardPatch postinstall script installs Installomator to /usr/local/bin/
+  which conflicts with pkg convention. Tech debt -- see open items.
 
 ## Architecture decisions
 - Agent to server: REST polling only, no WebSocket
@@ -72,12 +93,38 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
   environment. It sets defaults at the top of the script, then a "rest of
   arguments" loop does eval $1 on any positional argument containing "=".
   Only positional KEY=VALUE arguments override defaults. patcher.js passes
-  NOTIFY=${mode} etc as positional args (correct). version-checker.js was
-  fixed June 12 to pass NOTIFY=silent as a positional arg.
+  NOTIFY=${mode} etc as positional args (correct). version-checker.js now
+  passes DEBUG=1 as positional arg (fixed June 16 -- was silently ignored
+  as env var, causing full downloads instead of version checks).
 - Agent token is stored in /etc/orchardpatch/config.json on each managed
   machine. Token rotation requires manual config edit + agent restart on
   every managed machine. This is a product gap -- needs a feature before
   real users are onboarded.
+- All fleet server calls from the frontend go through Next.js proxy routes.
+  No direct browser-to-fleet-server calls exist as of June 16 (Phase 5).
+  FLEET_SERVER_URL and FLEET_SERVER_TOKEN are server-side only env vars.
+- Exit code 23 from Installomator means "App previously installed from App
+  Store -- Installomator respects the MAS installation and will not overwrite."
+  This is correct behavior. MAS apps cannot be patched via Installomator.
+  Bitwarden and Canva are MAS installs on Jude's machine.
+
+## version-checker.js architecture (fixed June 16)
+- Uses spawnSync (not execSync) to invoke Installomator. execSync shells out
+  via /bin/sh -c which times out in the LaunchDaemon root environment.
+  spawnSync with explicit args array bypasses the shell entirely.
+- Passes DEBUG=1 as a positional arg -- tells Installomator to do a dry run
+  (version check only, no download/install). Without this working, Installomator
+  attempts full downloads during version checks, causing ETIMEDOUT errors.
+- Reads stdout and stderr directly from spawnSync result -- works correctly
+  even when Installomator times out (output buffered before kill).
+- Known issue: many labels still ETIMEDOUT because Installomator v10.8 hits
+  external URLs (GitHub API, vendor sites) to determine version. Unauthenticated
+  GitHub API calls limited to 60/hr. GITHUB_TOKEN not currently passed to
+  agent. Fix needed: add GITHUB_TOKEN support to agent config and pass as
+  positional arg to Installomator version checks.
+- STATUS AS OF JUNE 16 END: spawnSync fix deployed (commit b873040) to both
+  machines. DB still showing 0/45 versions populated. Clean cycle verification
+  pending -- next session should confirm or diagnose further.
 
 ## Two-table write pattern (complete as of June 13)
 - pending_patches -- the agent work queue. Agent polls this table every 15
@@ -134,6 +181,17 @@ and Installomator catching up is by design.
 "System" = any app signed by Apple (com.apple.* bundle ID) or resident
 under /System/. Not patchable via Installomator, tracked separately from
 Unknown. Unknown means "third-party app with no Installomator label yet."
+
+## MAS app classification
+Apps installed from the Mac App Store have a _MASReceipt directory inside
+their .app bundle. Installomator exits 23 on these -- correct behavior,
+not a bug. MAS apps cannot be patched via Installomator regardless of version.
+Check: ls /Applications/AppName.app/Contents/_MASReceipt/
+Known MAS installs on Jude's machine: Bitwarden, Canva (and likely others).
+UI gap: Patch button currently shows for MAS apps and fails with exit 23.
+Fix needed: detect _MASReceipt at inventory time, set source='mas', hide
+Patch button, show "Managed by App Store" instead. Requires mas CLI for
+actual MAS patching (not yet built).
 
 ## Label matching philosophy
 Bundle ID matching from fragments is not viable -- bundleID is effectively
@@ -281,9 +339,12 @@ not hardcoded in logic. Future sources slot in naturally.
 - Config: /etc/orchardpatch/config.json (token rotated June 13)
 - Logs: /var/log/orchardpatch/agent.log
 - Device ID persisted to /var/root/.orchardpatch/device-id.json
-- Installomator version: v10.9beta (2025-12-23) on both machines -- outdated.
-  Update via catalog deploy in Phase 4 (next session).
-- Both agents confirmed stable June 13 with all current fixes deployed.
+- Installomator: v10.8 (2025-03-28) on both machines, at
+  /usr/local/Installomator/Installomator.sh. Updated June 16 via catalog.
+- Both agents confirmed stable June 16 with all current fixes deployed.
+- IMPORTANT: VERSION_CHECK_INTERVAL=1 still set in Chip's machine plist
+  (added for testing June 16). Remove at next session start.
+- Known MAS apps (not patchable via Installomator): Bitwarden, Canva (Jude)
 - Known outdated apps on device-C02D52QTML85: Ollama (large, avoid as test
   target), Slack (in active use, avoid), Telegram (label mismatch, see below)
 
@@ -295,6 +356,8 @@ not hardcoded in logic. Future sources slot in naturally.
   path, source
   source values: 'user' (third-party, patchable), 'system' (Apple-managed)
 - latest_versions: label (PK), latest_version, last_checked, error
+  STATUS: as of June 16 end of session, latest_version IS NULL for all 45
+  rows. spawnSync fix deployed (commit b873040) -- clean cycle pending.
 - app_catalog: label (PK), app_name, bundle_id, expected_team, last_synced
   NOTE: bundle_id is null for effectively all rows -- 1,137 rows with real
   app_name/expected_team data as of June 12.
@@ -352,10 +415,12 @@ not hardcoded in logic. Future sources slot in naturally.
   1,137 total rows as of June 12 sync
 
 ## Next.js proxy routes (frontend)
-All 11 proxy routes use NEXT_PUBLIC_FLEET_SERVER_TOKEN with no hardcoded
-fallback as of June 13 (commit 3e39223). Return 503 "Fleet server not
-configured" if env var missing.
+All 13 proxy routes use FLEET_SERVER_TOKEN (non-public, server-side only)
+as of June 16 (Phase 5 complete). Return 503 if env var missing.
+No direct browser-to-fleet-server calls exist anywhere in the frontend.
 - /api/patch -- forwards to POST /patch
+- /api/patch-jobs -- forwards to GET /patch-jobs (NEW June 16)
+- /api/patch-jobs/branch -- forwards to POST /patch-jobs/branch (NEW June 16)
 - /api/patch-jobs/bushel
 - /api/patch-jobs/orchard
 - /api/patch-jobs/[id]/cancel
@@ -369,45 +434,55 @@ configured" if env var missing.
 
 ## Feature status
 
+### Shipped (June 16)
+- **Phase 4: Installomator self-update via catalog.** Both machines updated
+  from v10.9beta to v10.8 stable via /catalog UI in silent mode. patcher.js
+  INSTALLOMATOR_PATHS order fixed (pkg path first, commit 8ad966f). Chrome
+  patched successfully on both machines as Phase 4 verification. Phase 1 fix
+  confirmed holding in production (0 queued rows, 0 pending_patches after
+  completion). Commits 8ad966f (agent).
+- **Phase 5: Token lockdown.** All 5 client-side pages (patches, fleet,
+  reports, devices/[id], HomePageInner) migrated from direct fleet server
+  calls to proxy routes. 2 new proxy routes added: GET /api/patch-jobs,
+  POST /api/patch-jobs/branch. fleetServer.ts deleted (dead code).
+  NEXT_PUBLIC_FLEET_SERVER_URL and NEXT_PUBLIC_FLEET_SERVER_TOKEN removed
+  from Vercel. FLEET_SERVER_URL and FLEET_SERVER_TOKEN added as non-public
+  server-side vars. Token confirmed absent from browser bundle (devtools
+  verified). Commits 4b509f6, 208ee22, 6b2e20c (frontend).
+- **Catalog pagination.** Proxy now translates page+limit to offset for
+  server, adds page/pages back to response. Component has page size selector
+  (25/50/100, default 50) and prev/next page controls. Commit ee2a508.
+- **Success rate null guard.** successRate returns null (not 0) when no
+  terminal jobs exist, preventing false red coloring. Commit bbce1af.
+- **version-checker.js overhaul.** Two bugs fixed:
+  (1) DEBUG=1 moved from env var to positional arg -- Installomator now
+  performs dry-run version checks instead of attempting full downloads.
+  (2) execSync replaced with spawnSync -- bypasses /bin/sh shell which
+  times out in LaunchDaemon root environment. Reads stdout/stderr directly
+  from result object rather than thrown error.
+  Commits 7acabfc, b873040 (agent).
+  STATUS: deployed to both machines. DB still 0/45 versions. Clean
+  verification cycle pending at next session start.
+- **app.orchardpatch.com custom domain.** Vercel domain + Cloudflare CNAME
+  (DNS only, not proxied). Token confirmed absent from bundle. Safe to share
+  this URL externally once VERSION_CHECK_INTERVAL restored on Chip's machine.
+
 ### Shipped (June 13)
-- **Phase 1: Job-completion id-threading fix.** patch.id now threads through
-  pollAndRunPatches -> runPatchJob -> createJob -> reportPatchJob for all
-  methods. Server-side pending_patches DELETE on terminal status added to
-  POST /patch-jobs handler, transactional. started_at now populated on
-  completion. Verified end-to-end: 1Password 7 Fruit job queued -> success
-  on same row, pending_patches deleted, started_at set.
-  Agent commit f181e8f, server commit 463f19b.
-- **Phase 2: Agent deploy to both machines.** patcher.js + scheduler.js
-  (Phase 1 fix) + version-checker.js (NOTIFY=silent positional arg + HTML/
-  malformed version validation) deployed to both machines.
-- **Phase 3: Software Catalog page (/catalog).** Searchable table of 1,137
-  Installomator labels. SourceBadge component (extensible -- source string
-  is a label, not hardcoded logic). Deploy modal: device dropdown from
-  /api/devices, mode picker (silent/managed/prompted, defaults silent),
-  POST to /api/patch on confirm. Toast system, proper 400/500 error handling,
-  redirects to /patches on success. Commits 1935b1f + 3e39223.
-  Verified live: 1,137 apps loading, search working, pagination correct.
-- **Security: Token rotation + hardcoded fallback removal.** SERVER_TOKEN
-  rotated (old value "orchardpatch-fleet-2026" retired and dead). All 11
-  proxy routes stripped of hardcoded fallback strings. 503 guard added on
-  missing env vars. Agent /etc/orchardpatch/config.json updated on both
-  machines. Commit 3e39223.
+- **Phase 1: Job-completion id-threading fix.** Agent commit f181e8f,
+  server commit 463f19b.
+- **Phase 2: Agent deploy to both machines.**
+- **Phase 3: Software Catalog page (/catalog).** Commits 1935b1f + 3e39223.
+- **Security: Token rotation + hardcoded fallback removal.** Commit 3e39223.
 
 ### Previously shipped (carried forward)
-- Dashboard at /dashboard (fleet homepage), App Inventory at /apps
+- Dashboard at /dashboard, App Inventory at /apps
 - App detail page with version distribution, patch policy display,
   per-device Fruit patch button (disabled when app is current)
 - Device list and device detail pages
-- Patch History with status filter (all statuses including Cancelled),
-  StatusBadge with explicit cases for all five statuses
-- Branch, Bushel, Orchard patch modals (Orchard defaults to silent)
+- Patch History with status filter, StatusBadge
+- Branch, Bushel, Orchard patch modals
 - Cancel endpoint and cancel buttons on queued jobs
-- "Already closed" tooltips on patch modals
-- Fruit redirect to Patch History after queuing
 - Auth wall (LOGIN_PASSWORD + SESSION_SECRET middleware)
-- version-checker.js NOTIFY=silent positional arg fix (no more osascript
-  notification storms)
-- version-checker.js HTML/malformed version string rejection
 
 ### Known genuine unknowns (Jude's device)
 - ASUS Device Discovery
@@ -428,31 +503,42 @@ configured" if env var missing.
 - firefoxpkg: verify patches standard Firefox not ESR.
 
 ### In progress / Blocked
+- version-checker.js DB ingest: code fix deployed, clean cycle verification
+  needed at next session start. Check:
+  SELECT COUNT(*) FROM latest_versions WHERE latest_version IS NOT NULL;
+  Expect non-zero. If still 0, diagnose ingest step further.
 - Force reinstall option in catalog deploy modal -- deferred from Phase 3.
   Requires: schema change (add force_reinstall BOOLEAN DEFAULT FALSE to
   pending_patches), POST /patch body change (accept forceReinstall bool),
   agent change (read flag from pending_patches row, pass UNINSTALL=1 as
-  positional arg to Installomator -- same KEY=VALUE mechanism as NOTIFY).
-  Do not start until Phase 4 is verified.
+  positional arg to Installomator). Do not start until version checker
+  verified and Phase 6 decision made.
 - Bushel modal device count: pre-counts by installs not outdated status.
-  Modal claims "N devices" but server may reject if none are outdated.
   Cosmetic -- batch into next frontend push.
 
 ### Not yet built
-- Phase 4: Installomator self-update via catalog (next session priority 1)
-- Phase 5: Token lockdown -- remove NEXT_PUBLIC vars from browser bundle,
-  add server-side-only FLEET_SERVER_URL and FLEET_SERVER_TOKEN to Vercel,
-  update all proxy routes. Hard gate before external URL sharing.
-- Phase 6: Force check-in. Architecture: 60s fast loop + pending_commands
-  table. Cancel-window design decision required in Architectural Deep Dives
-  first (grace period vs cancel-via-command).
-- Agent token rotation as product feature (currently manual config edit on
-  every machine -- not viable at scale, needed before real users)
-- Agent self-update path (no manual file copy) -- needed before real users
+- Phase 6: Force check-in. TOP PRIORITY. Architecture: 60s fast loop +
+  pending_commands table. Cancel-window design decision required in
+  Architectural Deep Dives first (grace period vs cancel-via-command).
+  The 15-minute poll cycle makes every verification loop cost up to 15
+  minutes of waiting. This is actively painful during development.
+- Phase 7: Force reinstall in catalog deploy modal.
+- MAS app detection: detect _MASReceipt at inventory time, set source='mas',
+  show "Managed by App Store" instead of Patch button.
+- Installomator version + Update button on device detail page. Agent reports
+  installomatorVersion in check-in payload. Server stores in devices table
+  (new column). Frontend shows version + amber Update button when outdated.
+  Button triggers Fruit deploy of 'installomator' label to that device.
+- Exit code descriptions in Patch History log viewer. Map common codes to
+  plain English: 0=Success, 23=MAS install, 1=Label not found, 77=No URL.
+- GITHUB_TOKEN for agent: pass as positional arg to Installomator version
+  checks. Lifts GitHub API from 60/hr (unauthenticated) to 5000/hr. Needed
+  for reliable version checking across many labels.
+- Agent token rotation as product feature
+- Agent self-update path (no manual file copy)
 - "Clear by status" bulk action in Patch History
-- Pinned Apps on Dashboard (DB schema designed, empty state exists, needs
-  preferences table)
-- Graph reports (meaningful now that completion tracking works)
+- Pinned Apps on Dashboard (needs preferences table)
+- Graph reports
 - Automated catalog-sync schedule
 - Cultivation / policy-based auto-remediation (Coming Soon page exists)
 - Multi-tenancy / org isolation
@@ -461,42 +547,32 @@ configured" if env var missing.
 - CLI / Homebrew tap
 - mas integration (Mac App Store patching)
 - Homebrew integration (org-level opt-in by design)
-- AI-assisted patch approval workflows
-- Auto-generate policy documentation / MDM deployment playbooks
-- History auto-refresh / periodic polling
-- Server-side device typeahead
+- Catalog table column alignment fix (cosmetic -- columns shift between pages)
 - Light mode / Apple Business aesthetic
 - Sentry / error monitoring
 - DB indexes for fleet queries
-- Version string normalization
 - softwareupdate CLI research for system app patching
-- "Suggest label" UI on Unknown app rows
-- Community seed file for top 100 bundle ID -> label mappings
-- Disabling native app auto-updaters once OrchardPatch manages an app
 
 ## Open items / tech debt
 
 ### Priority order for next session
-1. Phase 4: Installomator self-update via catalog on both machines. Deploy
-   'installomator' label via /catalog UI in silent mode. Wait for agent poll
-   (or force check-in if Phase 6 lands first). Verify Installomator version
-   updated on both machines. Re-test Canva (was exit code 23 due to stale
-   Installomator v10.9beta). Verify Phase 1 fix in production: patch_jobs
-   row for the deploy job should transition to success on the SAME id, not
-   a new disconnected row.
-2. Phase 5: Token lockdown. Audit NEXT_PUBLIC usage. Convert all call sites
-   to server-side vars. Remove NEXT_PUBLIC vars from Vercel, add non-public
-   vars. Verify token absent from bundle. Verify all pages load.
-3. Phase 6: Force check-in. Architectural Deep Dives decision first on the
-   cancel-window design. Base server spec exists in "Cancel, Catalog, and
-   Nine Fixes" chat -- retrieve or regenerate there. Implementation includes
-   claimed_at staleness timeout to close the "claimed but abandoned" gap.
-4. Phase 7: Force reinstall in catalog modal (schema + agent + frontend).
-5. method='fruit' hardcode cleanup in POST /patch-jobs (agent sends method
-   in body, server uses it in VALUES instead of hardcoding).
-6. Bushel modal pre-count cosmetic fix.
-7. Agent token rotation product feature.
-8. "Clear by status" bulk action in Patch History.
+0. FIRST: remove VERSION_CHECK_INTERVAL=1 from Chip's machine plist, restart
+   agent. Verify version checker DB count is non-zero. If still 0, diagnose
+   before proceeding.
+1. Phase 6: Force check-in. Go to Architectural Deep Dives first for cancel-
+   window design decision. Then implement. This unblocks fast iteration on
+   everything else. 15-minute poll cycles are actively killing session velocity.
+2. Version checker GITHUB_TOKEN: add to agent config, pass to Installomator.
+   Fixes unauthenticated rate limiting (60 req/hr) that causes ETIMEDOUT on
+   GitHub-hosted app labels.
+3. Phase 7: Force reinstall in catalog modal.
+4. MAS app detection and UI flag.
+5. Installomator version + Update button on device detail.
+6. method='fruit' hardcode cleanup in POST /patch-jobs.
+7. Bushel modal pre-count cosmetic fix.
+8. Token rotation (token appeared in Chip diagnostic output June 16 session).
+9. Agent token rotation product feature.
+10. "Clear by status" bulk action in Patch History.
 
 ### Other open items
 - GitHub PAT (GITHUB_TOKEN): renewed May 12, 2026, scoped to all public
@@ -506,53 +582,60 @@ configured" if env var missing.
 - Catalog auto-sync not automated.
 - is_outdated field / legacy latest_version on apps table: ignore.
 - Server-side device typeahead: needs server-side search at fleet scale.
-- Dashboard --foreground override: deferred to light mode polish pass.
 - Telegram label mismatch: see Known label-matching issues above.
 - launchctl list can be misleading: exit-code/runs fields reflect history,
   not current state. Always confirm with ps aux for actual running PID.
-- "Claimed but abandoned" jobs have no recovery path: if agent claims a
-  pending_patches row and crashes before completing, the row is permanently
-  stuck. Phase 6 staleness timeout is the fix.
+- "Claimed but abandoned" jobs have no recovery path. Phase 6 staleness
+  timeout is the fix.
+- postinstall script installs Installomator to /usr/local/bin/Installomator.sh
+  which conflicts with pkg convention (/usr/local/Installomator/). Fix or
+  remove the postinstall Installomator install step.
 
 ## Next session priority order
-See Open items section above.
+See Open items section above. Start with VERSION_CHECK_INTERVAL restore
+and version checker verification before anything else.
 
 ## Lessons learned (June 12 late session)
 - The single most valuable pattern: verify documented architecture against
   actual code before building on it.
-- "End-to-end verified" in prior session notes likely meant "the app
-  actually updated on disk" -- not "the DB record completed correctly."
-  These are different claims.
-- A bug can exist in shared code for a long time without symptoms if the
-  precondition for triggering it never occurs.
 - launchctl list's exit-code/runs fields reflect history, not current state.
   Always confirm with ps aux.
 - Avoid follow-mode commands (tail -f) in Chip prompts.
 
 ## Lessons learned (June 13)
 - Token rotation has three components, not two: Railway SERVER_TOKEN,
-  Vercel NEXT_PUBLIC_FLEET_SERVER_TOKEN, AND /etc/orchardpatch/config.json
-  on every managed machine. Missing the agent config breaks check-ins
-  silently -- the dashboard goes dark with no obvious error. Agent token
-  rotation must become a product feature before onboarding real users.
+  Vercel token env var, AND /etc/orchardpatch/config.json on every managed
+  machine. Missing the agent config breaks check-ins silently.
 - Hardcoded secret fallbacks in source code are worse than NEXT_PUBLIC
-  exposure: they live in git history permanently, accessible to anyone with
-  repo access. Always use env vars with no fallback. Fail loudly (503) when
-  vars are missing -- silent fallback to a hardcoded credential is worse
-  than an error.
+  exposure: they live in git history permanently. Always fail loudly (503).
 - Two report paths exist in the agent (reportJobToServer in patcher.js AND
-  reportPatchJob in checkin.js, both posting to POST /patch-jobs). Both are
-  idempotent after the June 13 fix. Discovered only by reading the actual
-  files, not from prior documentation.
-- A test that inadvertently uses a different code path than intended can
-  still produce valid data. The 1Password 7 "Bushel" test actually ran as
-  Fruit (Bushel endpoint rejected the current app, Chip queued Fruit
-  directly). The id-threading fix was still verified correctly via that run.
-- The 15-minute agent poll interval creates real testing friction. Every
-  verification cycle that depends on agent completion costs up to 15 minutes
-  of waiting. Phase 6 (force check-in) should move up in priority to unlock
-  faster iteration on Phase 4 and beyond.
-- Bushel validates that apps are genuinely outdated before queuing. If all
-  target devices are already current, it returns 400. The catalog deploy
-  path (POST /patch) has no such validation by design -- required for
-  installing apps not yet in the device's inventory.
+  reportPatchJob in checkin.js). Both are idempotent.
+- The 15-minute agent poll interval creates real testing friction. Phase 6
+  is a prerequisite for fast iteration.
+
+## Lessons learned (June 16)
+- Installomator only reads KEY=VALUE flags from positional args (eval $1
+  loop), never from the process environment. Passing flags as env vars
+  silently does nothing. Always pass as positional args in the command string.
+- execSync shells out via /bin/sh -c. In a LaunchDaemon root environment,
+  /bin/sh spawn itself can ETIMEDOUT. Use spawnSync with an explicit args
+  array to bypass the shell entirely.
+- Exit code 23 from Installomator = "App installed from App Store -- will
+  not overwrite." Not a version issue. MAS apps cannot be patched via
+  Installomator regardless of which version is running.
+- Installomator v10.8 (stable/release branch) and v10.9beta (main branch)
+  coexist at different paths. The catalog deploys the pkg which installs to
+  /usr/local/Installomator/. patcher.js and version-checker.js must check
+  that path first. patcher.js had the wrong order (fixed June 16).
+- Vercel NEXT_PUBLIC_ vars are inlined at build time into the browser bundle
+  even when only referenced in server-side API route files. The prefix is
+  the signal to Next.js to embed statically. Rename to non-prefixed vars to
+  keep them server-side only.
+- Token rotation: Vercel sensitive vars cannot be retrieved from the UI after
+  saving. Always save the value in a password manager before setting.
+- When the token appeared in Chip's diagnostic output during a session,
+  rotate it. Treat session logs as potentially visible.
+- Phase 6 (force check-in) is not a nice-to-have. Without it, every
+  verification step costs up to 15 minutes. At 2-3 verifications per feature,
+  that's 30-45 minutes of waiting per session. It should have been built
+  before Phase 4.
