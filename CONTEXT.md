@@ -1,6 +1,6 @@
 # OrchardPatch -- Project Context
 
-Last updated: June 16, 2026
+Last updated: June 16, 2026 (evening)
 
 ## What OrchardPatch is
 A Mac admin tool providing complete visibility into managed macOS fleet apps
@@ -58,9 +58,11 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
 - VERSION_CHECK_INTERVAL -- check-ins between version runs (default: 10)
   NOTE: INSTALLOMATOR_PATH is NOT an env var -- agent discovers Installomator
   by checking a path list in order. See Installomator path section below.
-  IMPORTANT: VERSION_CHECK_INTERVAL=1 was temporarily set in Chip's machine
-  plist for testing (June 16). Must be removed and agent restarted at start
-  of next session to restore normal 2.5hr cycle.
+  NOTE: VERSION_CHECK_INTERVAL=1 (temporary test setting on Chip's machine)
+  was removed June 16 evening, agent reloaded, default 2.5hr cycle restored.
+  IMPORTANT: launchctl kickstart -k does NOT re-read plist EnvironmentVariables.
+  Changing an env var in the plist requires a full unload/reload
+  (bootout/bootstrap), not kickstart.
 
 ## Installomator path and version
 - Canonical pkg-managed path: /usr/local/Installomator/Installomator.sh
@@ -93,9 +95,10 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
   environment. It sets defaults at the top of the script, then a "rest of
   arguments" loop does eval $1 on any positional argument containing "=".
   Only positional KEY=VALUE arguments override defaults. patcher.js passes
-  NOTIFY=${mode} etc as positional args (correct). version-checker.js now
-  passes DEBUG=1 as positional arg (fixed June 16 -- was silently ignored
-  as env var, causing full downloads instead of version checks).
+  NOTIFY=${mode} etc as positional args (correct). NOTE: DEBUG=1 as a
+  positional arg is read correctly, but DEBUG=1 only skips the INSTALL step,
+  NOT the download. It does not give a download-free version check. See the
+  version-checker.js section for the actual version-check approach.
 - Agent token is stored in /etc/orchardpatch/config.json on each managed
   machine. Token rotation requires manual config edit + agent restart on
   every managed machine. This is a product gap -- needs a feature before
@@ -108,23 +111,37 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
   This is correct behavior. MAS apps cannot be patched via Installomator.
   Bitwarden and Canva are MAS installs on Jude's machine.
 
-## version-checker.js architecture (fixed June 16)
-- Uses spawnSync (not execSync) to invoke Installomator. execSync shells out
-  via /bin/sh -c which times out in the LaunchDaemon root environment.
-  spawnSync with explicit args array bypasses the shell entirely.
-- Passes DEBUG=1 as a positional arg -- tells Installomator to do a dry run
-  (version check only, no download/install). Without this working, Installomator
-  attempts full downloads during version checks, causing ETIMEDOUT errors.
-- Reads stdout and stderr directly from spawnSync result -- works correctly
-  even when Installomator times out (output buffered before kill).
-- Known issue: many labels still ETIMEDOUT because Installomator v10.8 hits
-  external URLs (GitHub API, vendor sites) to determine version. Unauthenticated
-  GitHub API calls limited to 60/hr. GITHUB_TOKEN not currently passed to
-  agent. Fix needed: add GITHUB_TOKEN support to agent config and pass as
-  positional arg to Installomator version checks.
-- STATUS AS OF JUNE 16 END: spawnSync fix deployed (commit b873040) to both
-  machines. DB still showing 0/45 versions populated. Clean cycle verification
-  pending -- next session should confirm or diagnose further.
+## version-checker.js architecture (rewritten June 16 evening)
+- CRITICAL CORRECTION: DEBUG=1 does NOT skip downloads. It only skips the
+  install step. Installomator still downloads the full artifact in DEBUG mode.
+  The earlier belief that DEBUG=1 = dry-run-no-download was wrong. That belief
+  drove the spawnSync work (commit b873040), which did not fix the timeouts
+  because the downloads were still happening.
+- Why large labels timed out: they were genuinely downloading the artifact
+  (Slack ~150MB, Office, Dropbox, etc.) and hitting the timeout before
+  appNewVersion was ever logged. Chrome-class labels worked because their
+  label fetches the version from an API (e.g. versionhistory.googleapis.com)
+  BEFORE any download.
+- ACTUAL FIX (commits 741add4, e071940): async spawn (not spawnSync), stream
+  stdout line by line, and kill the Installomator process the moment
+  appNewVersion= appears, before the download starts. 12s hard timeout as a
+  backstop. Captured value is validated against a version-shaped guard
+  (^\d+\.\d); non-matching captures (dates, HTML, stray strings) reject to null.
+- This works for labels that compute appNewVersion before the download step
+  (the majority). Labels that only know their version after downloading the
+  artifact cannot be resolved this way and stay null by construction.
+- STATUS: 33/45 labels populated in latest_versions. Confirmed working on
+  Chip's machine (device-C02D52QTML85). Jude's machine (device-GJM7N0XGL0)
+  still runs the prior version-checker -- redeploy of 741add4/e071940 pending,
+  LOW urgency now that ingest is null-safe (see below).
+- GITHUB_TOKEN still relevant: GitHub-API-backed labels are rate-limited to
+  60/hr unauthenticated, causing intermittent failures. Adding GITHUB_TOKEN
+  (passed as positional arg) lifts this to 5000/hr. Still queued.
+- STRATEGIC NOTE: running Installomator per-agent to get the latest version is
+  the wrong shape. Latest-version resolution is global, not per-device, and
+  belongs on the server. The early-kill scrape is a flagged stopgap. A
+  server-side, source-pluggable resolver is queued as an Architectural Deep
+  Dive (problem statement written, parked behind Phase 6).
 
 ## Two-table write pattern (complete as of June 13)
 - pending_patches -- the agent work queue. Agent polls this table every 15
@@ -176,6 +193,11 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
 to install, not manufacturer's current release. This ensures outdated always
 means "patchable right now." Occasional 1-2 day lag between vendor release
 and Installomator catching up is by design.
+NOTE: the queued version-resolver redesign (server-side, multi-source) puts
+this invariant under tension -- sources like Homebrew/Sparkle/vendor APIs give
+the manufacturer's current release, which can be AHEAD of what the
+Installomator label installs. Reconciling "latest that exists" vs "latest
+Installomator can deliver" is the central decision in that Deep Dive.
 
 ## System app classification philosophy
 "System" = any app signed by Apple (com.apple.* bundle ID) or resident
@@ -290,8 +312,10 @@ not hardcoded in logic. Future sources slot in naturally.
   machine.
 - CRITICAL: when using Python to write JS/TS files, avoid JS template
   literals with dollar signs (${}). Use plain string concatenation.
-- Always run `npm run build` locally before pushing any new page or component.
-  Run `node --check <file>` to confirm syntax after agent/server edits.
+  FURTHER (June 16): Python heredocs also mangle regex/SQL escape sequences
+  (e.g. \n becomes a literal newline, crashing the file). For edits
+  containing regex, SQL strings, or any escapes, use the direct file-edit
+  tool, NOT Python.
 - Context is lost when Chip compacts -- use this file to restore.
 - Start Claude.ai sessions by opening OrchardPatch project (CONTEXT.md loaded)
 - End every session: update CONTEXT.md, paste to Chip, commit. Also produce
@@ -299,6 +323,9 @@ not hardcoded in logic. Future sources slot in naturally.
 - Standing rule: always fix bugs at root cause. Never suggest workarounds.
   If a workaround is needed to unblock testing, flag it explicitly as tech
   debt before moving on.
+- Standing rule: don't polish a mechanism you've already decided to replace
+  (June 16 -- left the 6 false-match version labels as safe nulls rather than
+  hand-fixing them, because the resolver redesign supersedes the scrape).
 - Standing rule: all fixes should be resolvable through OrchardPatch itself.
   Don't suggest manual CLI commands on machines when OrchardPatch should
   handle it.
@@ -311,13 +338,14 @@ not hardcoded in logic. Future sources slot in naturally.
 - Chip is better for: codebase-aware implementation, exact file locations,
   running commands, hot-deploying to installed agent.
 - Use Opus for: complex ambiguous architecture decisions, multi-tenancy
-  design, Cultivation policy engine, YC application writing, decisions with
-  multi-week downstream consequences.
+  design, Cultivation policy engine, version-resolver redesign, YC
+  application writing, decisions with multi-week downstream consequences.
 
 ## Three-channel chat architecture (OrchardPatch project)
 1. "Architectural Deep Dives" -- Opus. Cross-repo architecture, multi-
-   tenancy, Cultivation policy engine, YC application, force check-in
-   cancel-window design, multi-week-consequence decisions.
+   tenancy, Cultivation policy engine, version-resolver redesign, YC
+   application, force check-in cancel-window design, multi-week-consequence
+   decisions.
 2. "Troubleshooting" -- Sonnet. Isolated bug fixes needing focused attention.
 3. Daily implementation chat -- Sonnet. Ongoing dev work.
 
@@ -337,13 +365,18 @@ not hardcoded in logic. Future sources slot in naturally.
 - Agent installed via .pkg on both machines
 - Agent install path: /usr/local/orchardpatch/agent/
 - Config: /etc/orchardpatch/config.json (token rotated June 13)
-- Logs: /var/log/orchardpatch/agent.log
+- Logs: /var/log/orchardpatch/agent.log (stdout),
+  /var/log/orchardpatch/agent.error.log (stderr -- version-check ETIMEDOUT
+  and "Command failed" lines land here, NOT in agent.log)
 - Device ID persisted to /var/root/.orchardpatch/device-id.json
 - Installomator: v10.8 (2025-03-28) on both machines, at
   /usr/local/Installomator/Installomator.sh. Updated June 16 via catalog.
-- Both agents confirmed stable June 16 with all current fixes deployed.
-- IMPORTANT: VERSION_CHECK_INTERVAL=1 still set in Chip's machine plist
-  (added for testing June 16). Remove at next session start.
+- Both agents stable June 16.
+- VERSION_CHECK_INTERVAL=1 removed from Chip's machine plist (June 16 evening),
+  agent reloaded, default cycle restored.
+- version-checker rewrite (741add4/e071940) is LIVE on Chip's machine
+  (device-C02D52QTML85). Jude's machine (device-GJM7N0XGL0) still runs the
+  prior version-checker -- redeploy pending, low urgency (ingest is null-safe).
 - Known MAS apps (not patchable via Installomator): Bitwarden, Canva (Jude)
 - Known outdated apps on device-C02D52QTML85: Ollama (large, avoid as test
   target), Slack (in active use, avoid), Telegram (label mismatch, see below)
@@ -356,8 +389,20 @@ not hardcoded in logic. Future sources slot in naturally.
   path, source
   source values: 'user' (third-party, patchable), 'system' (Apple-managed)
 - latest_versions: label (PK), latest_version, last_checked, error
-  STATUS: as of June 16 end of session, latest_version IS NULL for all 45
-  rows. spawnSync fix deployed (commit b873040) -- clean cycle pending.
+  STATUS: 33/45 populated as of June 16 evening.
+  INGEST IS NULL-SAFE (commit d96ea73): the ON CONFLICT upsert guards
+  latest_version with CASE WHEN EXCLUDED.latest_version IS NOT NULL AND <> ''
+  THEN EXCLUDED ELSE existing. error and last_checked always update. A failed
+  check records its error against the last-known-good version instead of
+  wiping it. (Open: "last-known-good held forever" staleness policy is a
+  resolver-era question, not yet handled.)
+  12 nulls, two categories:
+   - Genuine no-version query (Installomator exits non-zero): capcut, claude,
+     claudedesktop, darkroom, dropboxenterprise, trello. Several have Homebrew
+     casks -- the resolver redesign should recover these.
+   - False match / guard-rejected to null: boxdrive, chromeremotedesktop,
+     microsoftteams, microsoftteams-rollingout, nomad (date or stray-string
+     captures), coconutbattery (confirmed upstream HTML bug, outreach opener).
 - app_catalog: label (PK), app_name, bundle_id, expected_team, last_synced
   NOTE: bundle_id is null for effectively all rows -- 1,137 rows with real
   app_name/expected_team data as of June 12.
@@ -408,7 +453,9 @@ not hardcoded in logic. Future sources slot in naturally.
   claimed (deletes pending_patches, sets cancelled), never-enqueued (sets
   cancelled directly), claimed (409).
 - GET /patch-jobs -- list jobs, supports ?device_id, ?method, ?mode, ?status
-- POST /api/version-sync/ingest -- ingest version data
+- POST /api/version-sync/ingest -- ingest version data. ON CONFLICT upsert is
+  null-safe as of June 16 (commit d96ea73): null/empty latest_version
+  preserves the stored value; error and last_checked always update.
 - GET /api/version-sync and /api/version-sync/:label -- cache lookups
 - POST /api/catalog-sync -- sync Installomator catalog from GitHub
 - GET /api/catalog -- browse catalog, ?search= supported, pagination,
@@ -454,18 +501,21 @@ No direct browser-to-fleet-server calls exist anywhere in the frontend.
   (25/50/100, default 50) and prev/next page controls. Commit ee2a508.
 - **Success rate null guard.** successRate returns null (not 0) when no
   terminal jobs exist, preventing false red coloring. Commit bbce1af.
-- **version-checker.js overhaul.** Two bugs fixed:
-  (1) DEBUG=1 moved from env var to positional arg -- Installomator now
-  performs dry-run version checks instead of attempting full downloads.
-  (2) execSync replaced with spawnSync -- bypasses /bin/sh shell which
-  times out in LaunchDaemon root environment. Reads stdout/stderr directly
-  from result object rather than thrown error.
-  Commits 7acabfc, b873040 (agent).
-  STATUS: deployed to both machines. DB still 0/45 versions. Clean
-  verification cycle pending at next session start.
+- **version-checker.js rewrite (June 16 evening).** Root cause of 0/45 was
+  that DEBUG=1 does NOT skip downloads, only the install step, so version
+  checks downloaded full artifacts and timed out. Earlier DEBUG-as-positional
+  and execSync->spawnSync changes (7acabfc, b873040) did not fix it for that
+  reason. ACTUAL FIX (741add4, e071940): async spawn, stream stdout, kill the
+  moment appNewVersion= appears (before download), 12s backstop, version-shape
+  guard. RESULT: 33/45 populated. Live on Chip's machine; Jude's machine
+  redeploy pending (low urgency). See version-checker.js architecture section.
+- **Null-safe ingest (June 16 evening, commit d96ea73, server).** ON CONFLICT
+  upsert no longer lets a transient null overwrite a good latest_version.
+  Verified with a rolled-back transaction against live data. Closes the
+  clobber risk from a mixed-version fleet.
 - **app.orchardpatch.com custom domain.** Vercel domain + Cloudflare CNAME
   (DNS only, not proxied). Token confirmed absent from bundle. Safe to share
-  this URL externally once VERSION_CHECK_INTERVAL restored on Chip's machine.
+  externally.
 
 ### Shipped (June 13)
 - **Phase 1: Job-completion id-threading fix.** Agent commit f181e8f,
@@ -501,28 +551,35 @@ No direct browser-to-fleet-server calls exist anywhere in the frontend.
   investigated.
 - DaVinci Resolve: may have a label -- verify and add override if so.
 - firefoxpkg: verify patches standard Firefox not ESR.
+- Date/build-versioned labels (boxdrive, nomad, the Teams labels, etc.):
+  the version-shape guard (^\d+\.\d) rejects date-style captures to null.
+  Some of these may legitimately use CalVer/build versions. Version-string
+  normalization across schemes is an open question for the resolver redesign,
+  not a piecemeal fix now.
 
 ### In progress / Blocked
-- version-checker.js DB ingest: code fix deployed, clean cycle verification
-  needed at next session start. Check:
-  SELECT COUNT(*) FROM latest_versions WHERE latest_version IS NOT NULL;
-  Expect non-zero. If still 0, diagnose ingest step further.
 - Force reinstall option in catalog deploy modal -- deferred from Phase 3.
   Requires: schema change (add force_reinstall BOOLEAN DEFAULT FALSE to
   pending_patches), POST /patch body change (accept forceReinstall bool),
   agent change (read flag from pending_patches row, pass UNINSTALL=1 as
-  positional arg to Installomator). Do not start until version checker
-  verified and Phase 6 decision made.
+  positional arg to Installomator). Do not start until Phase 6 decision made.
 - Bushel modal device count: pre-counts by installs not outdated status.
   Cosmetic -- batch into next frontend push.
 
 ### Not yet built
 - Phase 6: Force check-in. TOP PRIORITY. Architecture: 60s fast loop +
-  pending_commands table. Cancel-window design decision required in
-  Architectural Deep Dives first (grace period vs cancel-via-command).
+  pending_commands table (server cannot push to NAT'd agents, so force
+  check-in is a fast agent poll of a commands queue, not a server push).
+  Cancel-window design decision required in Architectural Deep Dives (Opus)
+  FIRST (grace period vs cancel-via-command). Should also resolve the
+  claimed-but-abandoned staleness gap (a crashed agent leaves a claimed
+  pending_patches row stuck; add a claimed_at staleness timeout to self-heal).
   The 15-minute poll cycle makes every verification loop cost up to 15
   minutes of waiting. This is actively painful during development.
 - Phase 7: Force reinstall in catalog deploy modal.
+- Version-resolver redesign: move latest-version sourcing off agents to a
+  server-side, source-pluggable resolver. Architectural Deep Dive (problem
+  statement written). AFTER Phase 6.
 - MAS app detection: detect _MASReceipt at inventory time, set source='mas',
   show "Managed by App Store" instead of Patch button.
 - Installomator version + Update button on device detail page. Agent reports
@@ -533,7 +590,7 @@ No direct browser-to-fleet-server calls exist anywhere in the frontend.
   plain English: 0=Success, 23=MAS install, 1=Label not found, 77=No URL.
 - GITHUB_TOKEN for agent: pass as positional arg to Installomator version
   checks. Lifts GitHub API from 60/hr (unauthenticated) to 5000/hr. Needed
-  for reliable version checking across many labels.
+  for reliable version checking across GitHub-hosted labels.
 - Agent token rotation as product feature
 - Agent self-update path (no manual file copy)
 - "Clear by status" bulk action in Patch History
@@ -556,23 +613,28 @@ No direct browser-to-fleet-server calls exist anywhere in the frontend.
 ## Open items / tech debt
 
 ### Priority order for next session
-0. FIRST: remove VERSION_CHECK_INTERVAL=1 from Chip's machine plist, restart
-   agent. Verify version checker DB count is non-zero. If still 0, diagnose
-   before proceeding.
-1. Phase 6: Force check-in. Go to Architectural Deep Dives first for cancel-
-   window design decision. Then implement. This unblocks fast iteration on
-   everything else. 15-minute poll cycles are actively killing session velocity.
+1. Phase 6: Force check-in. Go to Architectural Deep Dives (Opus) FIRST for
+   the cancel-window design decision (grace period vs cancel-via-command),
+   which must also resolve the claimed-but-abandoned staleness gap. Settle the
+   design before any code. This unblocks fast iteration on everything else.
+   15-minute poll cycles are actively killing session velocity.
 2. Version checker GITHUB_TOKEN: add to agent config, pass to Installomator.
-   Fixes unauthenticated rate limiting (60 req/hr) that causes ETIMEDOUT on
-   GitHub-hosted app labels.
-3. Phase 7: Force reinstall in catalog modal.
-4. MAS app detection and UI flag.
-5. Installomator version + Update button on device detail.
-6. method='fruit' hardcode cleanup in POST /patch-jobs.
-7. Bushel modal pre-count cosmetic fix.
-8. Token rotation (token appeared in Chip diagnostic output June 16 session).
-9. Agent token rotation product feature.
-10. "Clear by status" bulk action in Patch History.
+   Lifts GitHub API rate limit from 60/hr to 5000/hr. Helps the GitHub-API
+   labels and feeds the eventual server-side resolver.
+3. Redeploy version-checker fix (741add4/e071940) to Jude's machine
+   (device-GJM7N0XGL0). Low urgency -- ingest is null-safe -- fold into the
+   next routine agent deploy.
+4. Version-resolver redesign: Architectural Deep Dive (problem statement
+   written). Move latest-version sourcing off agents to a server-side,
+   source-pluggable resolver. AFTER Phase 6.
+5. Phase 7: Force reinstall in catalog modal.
+6. MAS app detection and UI flag.
+7. Installomator version + Update button on device detail.
+8. method='fruit' hardcode cleanup in POST /patch-jobs.
+9. Bushel modal pre-count cosmetic fix.
+10. Token rotation (token appeared in Chip diagnostic output June 16 session).
+11. Agent token rotation product feature.
+12. "Clear by status" bulk action in Patch History.
 
 ### Other open items
 - GitHub PAT (GITHUB_TOKEN): renewed May 12, 2026, scoped to all public
@@ -585,15 +647,21 @@ No direct browser-to-fleet-server calls exist anywhere in the frontend.
 - Telegram label mismatch: see Known label-matching issues above.
 - launchctl list can be misleading: exit-code/runs fields reflect history,
   not current state. Always confirm with ps aux for actual running PID.
+- launchctl kickstart -k does not re-read plist EnvironmentVariables. Use a
+  full unload/reload for env changes.
 - "Claimed but abandoned" jobs have no recovery path. Phase 6 staleness
   timeout is the fix.
 - postinstall script installs Installomator to /usr/local/bin/Installomator.sh
   which conflicts with pkg convention (/usr/local/Installomator/). Fix or
   remove the postinstall Installomator install step.
+- Last-known-good version held forever: with null-safe ingest, a permanently
+  failing label keeps its last good version while errors accumulate. Add a
+  staleness policy in the resolver redesign.
 
 ## Next session priority order
-See Open items section above. Start with VERSION_CHECK_INTERVAL restore
-and version checker verification before anything else.
+See Open items section above. Item 0 (version checker) is CLOSED. Start with
+Phase 6 (force check-in): go to Architectural Deep Dives (Opus) for the
+cancel-window design decision FIRST, before any implementation.
 
 ## Lessons learned (June 12 late session)
 - The single most valuable pattern: verify documented architecture against
@@ -618,8 +686,8 @@ and version checker verification before anything else.
   loop), never from the process environment. Passing flags as env vars
   silently does nothing. Always pass as positional args in the command string.
 - execSync shells out via /bin/sh -c. In a LaunchDaemon root environment,
-  /bin/sh spawn itself can ETIMEDOUT. Use spawnSync with an explicit args
-  array to bypass the shell entirely.
+  /bin/sh spawn itself can ETIMEDOUT. Prefer spawn/spawnSync with an explicit
+  args array over execSync.
 - Exit code 23 from Installomator = "App installed from App Store -- will
   not overwrite." Not a version issue. MAS apps cannot be patched via
   Installomator regardless of which version is running.
@@ -636,12 +704,35 @@ and version checker verification before anything else.
 - When the token appeared in Chip's diagnostic output during a session,
   rotate it. Treat session logs as potentially visible.
 - Phase 6 (force check-in) is not a nice-to-have. Without it, every
-  verification step costs up to 15 minutes. At 2-3 verifications per feature,
-  that's 30-45 minutes of waiting per session. It should have been built
-  before Phase 4.
-## Late addition (June 16 17:44)
-- Poller confirmed: DB count stayed 0/45 through 17:40 PT despite spawnSync fix deployed.
-- spawnSync works correctly in isolation (sudo node test showed versions resolving).
-- The 0/45 in daemon context suggests ingest is either not firing or failing silently.
-- Next session: add explicit logging to ingestToServer, or test runVersionCheck end-to-end
-  as root with full verbose output before diagnosing further.
+  verification step costs up to 15 minutes.
+
+## Lessons learned (June 16, continued / evening)
+- DEBUG=1 does NOT skip downloads in Installomator. It only skips the install
+  step. The artifact is still downloaded. This invalidated the earlier
+  "DEBUG=1 = dry run" assumption and the spawnSync fix built on it.
+- The working approach for download-free version checks: stream Installomator
+  output and kill the process the instant appNewVersion= is logged, before the
+  download begins (async spawn). Validate the captured value against a
+  version-shaped guard so dates/HTML/stray strings reject to null. This is a
+  flagged stopgap -- the real fix is a server-side resolver.
+- launchctl kickstart -k does NOT re-read plist EnvironmentVariables. A plist
+  env change needs a full unload/reload (bootout/bootstrap) to take effect.
+  This likely explains why some earlier VERSION_CHECK_INTERVAL=1 test cycles
+  never applied.
+- Version-check error/timeout output lands in agent.error.log (stderr), not
+  agent.log (stdout). Look there when diagnosing version checks.
+- Python heredoc mangled a regex (\n became a literal newline), crashing the
+  agent on startup. Substantial JS/TS edits with escapes, regex, or SQL
+  strings go through direct file edits, never Python.
+- An unconditional ON CONFLICT ... DO UPDATE SET lets a transient null clobber
+  a good value. Guard the column (CASE WHEN incoming IS NOT NULL AND <> '');
+  keep audit columns (error, last_checked) unconditional so failures are still
+  recorded against the last-known-good value.
+- Latest-version resolution is GLOBAL, not per-device. Running it on every
+  agent via Installomator is the wrong shape and the source of most of this
+  pain. The real fix is a server-side, source-pluggable resolver (Sparkle
+  appcast, Homebrew cask JSON, vendor APIs, GitHub releases, Installomator
+  label version-logic as fragile fallback). Queued as an Architectural Deep
+  Dive, parked behind Phase 6.
+- Don't polish a mechanism you've decided to replace. The 6 false-match null
+  labels were left as safe nulls rather than hand-fixed.
