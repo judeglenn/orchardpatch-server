@@ -84,6 +84,29 @@ function sint(val, fallback = null) {
   return isNaN(n) ? fallback : n;
 }
 
+// ─── Shared job termination helper ─────────────────────────────────────────────
+
+async function terminate_stuck_job(id, reason) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      'DELETE FROM pending_patches WHERE id = $1',
+      [id]
+    );
+    await client.query(
+      "UPDATE patch_jobs SET status='failed', error=$1, completed_at=now() WHERE id=$2 AND status='queued'",
+      [reason, id]
+    );
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 // ─── Agent Check-in ───────────────────────────────────────────────────────────
 
 app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
@@ -764,19 +787,43 @@ app.post("/pending-patches/:id/claim", apiRateLimit, authMiddleware, async (req,
 
 // ─── Cleanup ──────────────────────────────────────────────────────────────────
 
-// Remove claimed pending_patches older than 24h
+// 24h expiry: terminate unclaimed patches whose device never checked in
 setInterval(async () => {
   try {
-    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const result = await pool.query(
-      "DELETE FROM pending_patches WHERE created_at < $1",
-      [cutoff]
+      "SELECT id FROM pending_patches WHERE claimed_at IS NULL AND created_at < now() - interval '24 hours'"
     );
-    if (result.rowCount > 0) console.log(`[Cleanup] Removed ${result.rowCount} old pending patches`);
+    for (const row of result.rows) {
+      try {
+        await terminate_stuck_job(row.id, 'expired: device did not check in within 24h');
+        console.log('[cron] expired job ' + row.id);
+      } catch (err) {
+        console.error('[cron] failed to expire job ' + row.id + ':', err.message);
+      }
+    }
   } catch (err) {
-    console.error("[Cleanup] pending_patches:", err.message);
+    console.error('[Cleanup] 24h expiry sweep:', err.message);
   }
 }, 60 * 60 * 1000); // every hour
+
+// 30-min staleness sweep: terminate claimed patches whose agent died without reporting
+setInterval(async () => {
+  try {
+    const result = await pool.query(
+      "SELECT id FROM pending_patches WHERE claimed_at IS NOT NULL AND claimed_at < now() - interval '30 minutes'"
+    );
+    for (const row of result.rows) {
+      try {
+        await terminate_stuck_job(row.id, 'abandoned: claim exceeded 30m staleness, agent did not report');
+        console.log('[cron] abandoned job ' + row.id);
+      } catch (err) {
+        console.error('[cron] failed to abandon job ' + row.id + ':', err.message);
+      }
+    }
+  } catch (err) {
+    console.error('[Cleanup] 30m staleness sweep:', err.message);
+  }
+}, 300000); // every 5 minutes
 
 // ─── Version Cache ────────────────────────────────────────────────────────────
 
