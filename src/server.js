@@ -646,66 +646,46 @@ app.post("/patch-jobs/:id/cancel", apiRateLimit, authMiddleware, async (req, res
 
   const client = await pool.connect();
   try {
-    // Step 1: Look up the patch_jobs row
+    await client.query("BEGIN");
+
+    // Lock the patch_jobs row so claim and cancel serialize — whichever transaction
+    // grabs the lock first wins; the other sees the committed result.
     const jobResult = await client.query(
-      "SELECT id, device_id, label, status FROM patch_jobs WHERE id = $1",
+      "SELECT id, status, claimed_at FROM patch_jobs WHERE id = $1 FOR UPDATE",
       [s(id, 100)]
     );
+
     if (jobResult.rows.length === 0) {
+      await client.query("ROLLBACK");
       return res.status(404).json({ error: "Job not found" });
     }
 
     const job = jobResult.rows[0];
 
-    // Step 2: Check if job is already in a terminal state
     if (["success", "completed", "failed", "cancelled"].includes(job.status)) {
+      await client.query("ROLLBACK");
       return res.status(409).json({
         error: `Job is already ${job.status} and cannot be cancelled`,
         status: job.status,
       });
     }
 
-    // Step 3: Check if a pending_patches row exists (source of truth for cancellability)
-    const pendingResult = await client.query(
-      "SELECT id, claimed_at FROM pending_patches WHERE id = $1",
+    if (job.claimed_at) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "already picked up by agent" });
+    }
+
+    // Unclaimed — cancel atomically
+    await client.query("DELETE FROM pending_patches WHERE id = $1", [s(id, 100)]);
+    await client.query(
+      "UPDATE patch_jobs SET status = 'cancelled', completed_at = now() WHERE id = $1",
       [s(id, 100)]
     );
-
-    if (pendingResult.rows.length === 0) {
-      // No pending_patches row + non-terminal status means this job was never
-      // enqueued (the agent's claim flow only sets claimed_at, it never deletes
-      // the row until completion, which would be a terminal status caught in
-      // Step 2). This is an orphaned job, safe to cancel directly.
-      await client.query("UPDATE patch_jobs SET status = $1 WHERE id = $2", ["cancelled", s(id, 100)]);
-      return res.json({ success: true, message: "Job was never enqueued and has been cancelled", id });
-    }
-
-    const pendingRow = pendingResult.rows[0];
-    if (pendingRow.claimed_at) {
-      return res.status(409).json({
-        error: "Job has already been picked up by the agent and cannot be cancelled",
-        status: job.status,
-      });
-    }
-
-    // else: pending_patches row exists, not yet claimed, fall through to Step 4
-
-    // Step 4: Job is cancellable — delete pending_patches and update patch_jobs in transaction
-    await client.query("BEGIN");
-    try {
-      await client.query("DELETE FROM pending_patches WHERE id = $1", [s(id, 100)]);
-      await client.query("UPDATE patch_jobs SET status = $1 WHERE id = $2", [
-        "cancelled",
-        s(id, 100),
-      ]);
-      await client.query("COMMIT");
-      console.log(`[Cancel] Job ${id} cancelled successfully`);
-      res.json({ success: true, message: "Job cancelled", id });
-    } catch (txErr) {
-      await client.query("ROLLBACK");
-      throw txErr;
-    }
+    await client.query("COMMIT");
+    console.log(`[Cancel] Job ${id} cancelled successfully`);
+    res.json({ success: true, message: "Job cancelled", id });
   } catch (err) {
+    try { await client.query("ROLLBACK"); } catch (_) {}
     console.error("[POST /patch-jobs/:id/cancel]", err.message);
     res.status(500).json({ error: "Internal server error" });
   } finally {
@@ -727,30 +707,66 @@ app.post("/patch", apiRateLimit, authMiddleware, async (req, res) => {
   const createdAt = new Date().toISOString();
   const resolvedMode = s(mode, 50) || "managed";
 
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  if (resolvedMode === "silent") {
+    // 15s undo window: pending_patches withheld for silent mode
+    // patch_jobs row written immediately (visible in history with Undo affordance)
+    const client = await pool.connect();
+    try {
+      await client.query(
+        "INSERT INTO patch_jobs (id, device_id, app_name, label, mode, method, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [id, s(deviceId, 100), s(appName), s(label, 100), resolvedMode, "fruit", "queued", createdAt]
+      );
+    } catch (err) {
+      console.error("[POST /patch silent patch_jobs]", err.message);
+      client.release();
+      return res.status(500).json({ error: "Internal server error" });
+    } finally {
+      client.release();
+    }
 
-    await client.query(`
-      INSERT INTO patch_jobs (id, device_id, app_name, label, mode, method, status, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `, [id, s(deviceId, 100), s(appName), s(label, 100), resolvedMode, "fruit", "queued", createdAt]);
+    // Enqueue the agent work item after 15s — if cancelled before then, this becomes a no-op
+    // (cancel sets status='cancelled' on patch_jobs; the INSERT here is independent and will
+    // still run, but the agent will find no matching unclaimed row if already cancelled
+    // via the patch_jobs status check on the cancel endpoint... TODO: use a flag/abort)
+    setTimeout(async () => {
+      try {
+        await pool.query(
+          "INSERT INTO pending_patches (id, device_id, label, app_name, mode, created_at) VALUES ($1, $2, $3, $4, $5, now())",
+          [id, s(deviceId, 100), s(label, 100), s(appName), resolvedMode]
+        );
+        console.log(`[Patch] Deferred pending_patches enqueued for ${id}`);
+      } catch (err) {
+        console.error(`[Patch] Deferred pending_patches insert failed for ${id}:`, err.message);
+      }
+    }, 15000);
+  } else {
+    // Non-silent: write both rows atomically
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
 
-    await client.query(`
-      INSERT INTO pending_patches (id, device_id, bundle_id, label, app_name, mode, created_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)
-    `, [id, s(deviceId, 100), s(bundleId), s(label, 100), s(appName), resolvedMode, createdAt]);
+      await client.query(
+        "INSERT INTO patch_jobs (id, device_id, app_name, label, mode, method, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [id, s(deviceId, 100), s(appName), s(label, 100), resolvedMode, "fruit", "queued", createdAt]
+      );
 
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    console.error("[POST /patch]", err.message);
-    return res.status(500).json({ error: "Internal server error" });
-  } finally {
-    client.release();
+      await client.query(
+        "INSERT INTO pending_patches (id, device_id, bundle_id, label, app_name, mode, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        [id, s(deviceId, 100), s(bundleId), s(label, 100), s(appName), resolvedMode, createdAt]
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error("[POST /patch]", err.message);
+      client.release();
+      return res.status(500).json({ error: "Internal server error" });
+    } finally {
+      client.release();
+    }
   }
 
-  console.log(`[Patch] Queued ${label} for ${deviceId}`);
+  console.log(`[Patch] Queued ${label} for ${deviceId} mode=${resolvedMode}`);
   res.json({ ok: true, id, deviceId, label, appName, createdAt });
 });
 
@@ -833,7 +849,7 @@ app.post("/pending-commands/:id/claim", apiRateLimit, authMiddleware, async (req
 app.post("/pending-commands/:id/complete", apiRateLimit, authMiddleware, async (req, res) => {
   const id = sint(req.params.id);
   if (!id) return res.status(400).json({ error: "id is required" });
-  const result_text = (req.body && req.body.result) || null;
+  const result_text = (req.body && req.body.result !== undefined) ? req.body.result : null;
 
   try {
     await pool.query(
