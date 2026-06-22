@@ -745,6 +745,12 @@ app.post("/patch", apiRateLimit, authMiddleware, async (req, res) => {
     // via the patch_jobs status check on the cancel endpoint... TODO: use a flag/abort)
     setTimeout(async () => {
       try {
+        // KNOWN RACE: a ~1ms window exists between this SELECT and the INSERT below.
+        // A cancel arriving in that gap could flip patch_jobs to 'cancelled' after
+        // we read 'queued', causing the INSERT to fire for a cancelled job.
+        // Full fix: wrap SELECT + INSERT in a FOR UPDATE transaction.
+        // Acceptable at current fleet scale (2 devices, human-initiated cancels).
+        // Revisit before multi-tenancy ships.
         // Guard: skip insert if job was cancelled during the undo window
         const check = await pool.query(
           "SELECT status FROM patch_jobs WHERE id = $1",
