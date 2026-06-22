@@ -1,6 +1,6 @@
 # OrchardPatch -- Project Context
 
-Last updated: June 16, 2026 (evening)
+Last updated: June 22, 2026 (late night)
 
 ## What OrchardPatch is
 A Mac admin tool providing complete visibility into managed macOS fleet apps
@@ -24,12 +24,16 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
   - Deployed: https://app.orchardpatch.com (primary)
               https://orchardpatch.vercel.app (alias, still active)
 - Waitlist: github.com/judeglenn/orchardpatch-waitlist
+  - Local: ~/Projects/orchardpatch-waitlist
+  - Deployed: https://orchardpatch.com (marketing/waitlist page)
+  - NOTE: GitHub PAT does not scope to this repo. Push via SSH only.
 - Marketing: https://orchardpatch.com
 
 ## Stack
 - Fleet server: Node.js/Express on Railway
 - Database: PostgreSQL (Railway-hosted), schema auto-migrates on startup
 - Web app: Next.js 14 (App Router), TypeScript, Tailwind, deployed on Vercel
+- Waitlist: Next.js 16.2.0, Tailwind v4, Resend, Google Sheets API, on Vercel
 - Agent: Node.js LaunchDaemon (root), local HTTP on port 47652
 - Auth: x-orchardpatch-token header, SERVER_TOKEN env var
 
@@ -51,6 +55,13 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
   confirmed absent from browser bundle. All fleet calls go through proxy layer.
   Token rotation note: save new token value in password manager before rotating
   -- Vercel sensitive vars cannot be retrieved after saving.
+
+## Vercel environment variables (waitlist)
+- RESEND_API_KEY -- Resend API key for owner notification emails
+- WAITLIST_SHEET_ID -- Google Sheet ID for signup capture
+- GOOGLE_SERVICE_KEY -- Google service account JSON key for Sheets API
+  NOTE: All three confirmed set in Vercel production as of June 21.
+  They are NOT in .env.local -- that is expected for local dev.
 
 ## Agent environment variables
 - SERVER_URL -- fleet server URL
@@ -290,6 +301,10 @@ Key framing: OrchardPatch is a UI layer that makes Installomator accessible
 to orgs that would never run it from the command line. Not a competitor -- a
 distribution channel that grows Installomator's reach and user base.
 
+NOTE: installomator.com is a third-party SEO content site, not the official
+project. Official Installomator lives at github.com/Installomator/Installomator.
+All outreach goes to GitHub and MacAdmins Slack.
+
 Future complexity: when Homebrew is added as a source, the relationship
 context changes. Be upfront with maintainers early rather than surprising
 them. Homebrew support should be org-level opt-in (security policy,
@@ -481,6 +496,11 @@ No direct browser-to-fleet-server calls exist anywhere in the frontend.
 
 ## Feature status
 
+### Shipped (June 21-22, 2026 -- waitlist page)
+- **Waitlist page overhaul.** Full visual redesign, copy overhaul, fleet size
+  capture field, deduplication, privacy popover, contact copy-on-click.
+  See Waitlist page section below for full details.
+
 ### Shipped (June 16)
 - **Phase 4: Installomator self-update via catalog.** Both machines updated
   from v10.9beta to v10.8 stable via /catalog UI in silent mode. patcher.js
@@ -605,7 +625,10 @@ No direct browser-to-fleet-server calls exist anywhere in the frontend.
 - mas integration (Mac App Store patching)
 - Homebrew integration (org-level opt-in by design)
 - Catalog table column alignment fix (cosmetic -- columns shift between pages)
-- Light mode / Apple Business aesthetic
+- Console UI redesign: match main app to waitlist page aesthetic (light mode,
+  macOS Finder-inspired, hunter green direction). Take product screenshots
+  after redesign to add to waitlist page hero. Screenshots need representative
+  fleet data to be worth showing. Queued after Phase 6.
 - Sentry / error monitoring
 - DB indexes for fleet queries
 - softwareupdate CLI research for system app patching
@@ -635,10 +658,12 @@ No direct browser-to-fleet-server calls exist anywhere in the frontend.
 10. Token rotation (token appeared in Chip diagnostic output June 16 session).
 11. Agent token rotation product feature.
 12. "Clear by status" bulk action in Patch History.
+13. Console UI redesign (after Phase 6 -- see Not yet built above).
 
 ### Other open items
 - GitHub PAT (GITHUB_TOKEN): renewed May 12, 2026, scoped to all public
-  repos -- tighten to Installomator repo only at next rotation.
+  repos -- tighten to Installomator repo only at next rotation. Does NOT
+  scope to orchardpatch-waitlist repo; use SSH for that repo.
 - agent_url column: unused, reserved for future server-initiated flows.
 - No DB indexes on fleet queries yet.
 - Catalog auto-sync not automated.
@@ -659,9 +684,94 @@ No direct browser-to-fleet-server calls exist anywhere in the frontend.
   staleness policy in the resolver redesign.
 
 ## Next session priority order
-See Open items section above. Item 0 (version checker) is CLOSED. Start with
-Phase 6 (force check-in): go to Architectural Deep Dives (Opus) for the
-cancel-window design decision FIRST, before any implementation.
+See Open items section above. Waitlist page work is COMPLETE (June 22).
+Start with Phase 6 (force check-in): go to Architectural Deep Dives (Opus)
+for the cancel-window design decision FIRST, before any implementation.
+
+## Waitlist page (orchardpatch-waitlist repo)
+
+### Current state (June 22, 2026)
+Live at https://orchardpatch.com.
+Stack: Next.js 16.2.0, Tailwind v4, Resend, Google Sheets API.
+Deploy: Vercel, auto-deploys on push to main.
+GitHub PAT does not scope to this repo. Push via SSH only.
+
+### Capture mechanism
+- Resend: owner notification to info@orchardpatch.com on every signup.
+  info@orchardpatch.com Cloudflare Email Routing already configured.
+- Google Sheets: dual-write confirmed working in production.
+  WAITLIST_SHEET_ID and GOOGLE_SERVICE_KEY set in Vercel production.
+  Not in .env.local -- expected for local dev.
+- Deduplication: reads column A before appending. Skips sheet write on
+  duplicate email, still sends Resend notification.
+- Fleet size: optional dropdown (1-10, 11-50, 51-200, 201-1,000, 1,000+).
+  Captured as 4th column in sheet, included in Resend notification body.
+- 12 signups as of June 21 (March-May 2026), ~9-10 unique. Organic, zero
+  promotion. Notable domains: moof-it.co.uk, roadmap-it.co.uk, dtexsystems.com,
+  pstechnology.co.uk, create-it.at -- real Mac admin shops.
+
+### Page structure (June 22 state)
+Sections top to bottom, alternating gray/white:
+1. Nav: white (#ffffff)
+2. Hero (signup form): gray (#e8e8e8)
+3. THE PROBLEM: white (#ffffff)
+4. THE SOLUTION: gray (#e8e8e8)
+5. PATCH GRANULARITY: white (#ffffff)
+6. HOW IT WORKS: gray (#e8e8e8)
+7. Bottom CTA (signup form): white (#ffffff)
+8. Footer: gray (#e8e8e8)
+
+### Design
+- Light mode. macOS 27 Finder-inspired aesthetic.
+- Page backgrounds alternate #e8e8e8 and #ffffff per section above.
+- Cards: white (#ffffff), 1px solid #c5c5c7 border, rounded-3xl (24px).
+- Green: #2d6e1f for feature card headings, #4a7c2f for all CTA buttons,
+  #7dd94a for logo "Patch" wordmark only.
+- Section label pills: #1d1d1f fill, white text, font-semibold.
+- Nav: white background, thin bottom border #d2d2d7.
+- Footer: "Built for Mac admins, by a Mac admin."
+
+### Footer
+- Privacy: click opens popover with privacy notice (what is collected,
+  why, no spam/selling, removal via info@orchardpatch.com).
+- Contact: mailto:info@orchardpatch.com. Also copies address to clipboard
+  on click with brief "Copied!" tooltip. Does not prevent mailto from firing.
+
+### Copy principles (established June 21-22)
+- No em dashes anywhere on the page.
+- Installomator mentioned in patching context only, never discovery.
+  App discovery is the agent's own inventory -- Installomator is the patch
+  engine. These are separate mechanisms.
+- No vendor name-drops. BeyondTrust replaced with "privilege-managed
+  environments". Jamf/Mosyle/Kandji removed from enterprise callout.
+- Problem section frames a gap MDMs were not built to fill, not an MDM
+  failure. MDMs do their job; fleet-wide app discovery is a different problem.
+- Controlled-access framing: product is live, access opening gradually.
+  Not vaporware -- early fleets are running.
+- Brand names (Fruit/Branch/Bushel/Orchard) kept off the page. They earn
+  their place inside the app where users are already bought in.
+- Cultivation not mentioned -- premature for a waitlist page.
+
+### Key commits (June 21-22)
+19ffd53 -- fleet size field, phase 1 copy fixes
+129cc98 -- Unicode escape fixes (\u2014, \u2019)
+6929e44 -- full visual redesign (dark to light)
+e7a14b3 -- Finder aesthetic refinements (radius, contrast)
+8d1fe6e -- icon containers and hero padding
+803a7e5 -- dark section label pills, darkened feature headings
+40bbc8a -- CTA buttons updated to #4a7c2f
+66c2e7c -- problem section full rewrite
+2284189 -- problem heading update
+c7db950 -- section background alternation audit and fix
+(additional commits: granularity section, stats strip removal,
+privacy popover, contact copy-on-click, email updates)
+
+## Brand color note
+Current brand green: #7dd94a (bright lime). Hunter green (~#355E3B range)
+is the preferred future direction -- more professional for enterprise tooling,
+less consumer-retail. Full palette change requires updating both the waitlist
+repo and the main app UI. Defer to a dedicated brand session. Do not make
+piecemeal color changes in the interim.
 
 ## Lessons learned (June 12 late session)
 - The single most valuable pattern: verify documented architecture against
@@ -736,3 +846,37 @@ cancel-window design decision FIRST, before any implementation.
   Dive, parked behind Phase 6.
 - Don't polish a mechanism you've decided to replace. The 6 false-match null
   labels were left as safe nulls rather than hand-fixed.
+
+## Lessons learned (June 21-22 -- waitlist session)
+- Installomator and app discovery are separate mechanisms. Installomator is
+  the patch engine. The agent does its own filesystem inventory to discover
+  all installed apps. Copy and product framing must keep these distinct.
+  "Powered by Installomator" belongs in patching context only, never discovery.
+- installomator.com is a third-party SEO content site, not the official
+  project. Official Installomator is at github.com/Installomator/Installomator.
+- Criticizing MDMs on a marketing page conflicts with "works alongside your
+  MDM" positioning. Frame limitations as gaps the tools were not designed to
+  fill, not failures of the tools themselves.
+- Organic signups happen even without promotion. 12 signups arrived before
+  any MacAdmins Slack outreach. The page was already indexed.
+- EU/UK signups (moof-it.co.uk, create-it.at) create GDPR/UK GDPR exposure.
+  A privacy notice is required before promoting the page. The popover approach
+  is sufficient for pre-launch; a full privacy policy page may be needed later.
+- mailto links with target="_blank" open blank tabs in Chrome instead of
+  triggering the mail client. Never combine mailto with target="_blank".
+- macOS system-level mailto handler configuration (set in Mail.app preferences)
+  determines which app handles mailto links, not the browser. If no mail
+  client is set, browsers open blank tabs or pass to unexpected apps.
+- Combining mailto with clipboard copy on click gives the best UX: the mail
+  client opens for users who have one configured, and everyone can see and
+  copy the address regardless.
+- The bright lime brand green (#7dd94a) has insufficient contrast on white
+  card backgrounds for text. Use #2d6e1f for text on white. Reserve #7dd94a
+  for logo only.
+- Stats strips become redundant when page copy covers the same claims in
+  context. Remove rather than maintain two versions of the same claim.
+  Especially remove any stat you cannot fully stand behind (e.g. "0 MDM
+  conflicts, ever" is an unprovable absolute).
+- Section background alternation requires explicit auditing. Do not assume
+  the pattern is correct -- check each section wrapper against the target
+  palette. Adding or removing sections breaks the rhythm.
