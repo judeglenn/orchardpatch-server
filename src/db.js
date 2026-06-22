@@ -93,6 +93,16 @@ async function migrate() {
 
     CREATE INDEX IF NOT EXISTS idx_latest_versions_label ON latest_versions(label);
     CREATE INDEX IF NOT EXISTS idx_app_catalog_bundle ON app_catalog(bundle_id);
+
+    CREATE TABLE IF NOT EXISTS pending_commands (
+      id SERIAL PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      command TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      claimed_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      result TEXT
+    );
   `);
 
   // Add agent_url to devices for existing deployments
