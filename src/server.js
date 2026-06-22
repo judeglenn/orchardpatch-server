@@ -84,7 +84,14 @@ function sint(val, fallback = null) {
   return isNaN(n) ? fallback : n;
 }
 
-// ─── Shared job termination helper ─────────────────────────────────────────────
+// ─── Command enqueue allowlist ──────────────────────────────────────────────────
+
+const ENQUEUE_ALLOWED = new Set(['check_in']);
+// Mutating commands require an auth model + multi-tenancy before they go here.
+// Adding a command type to this set is a "design authorization first" trigger,
+// not a one-line change.
+
+// ─── Shared job termination helper ───────────────────────────────────────────
 
 async function terminate_stuck_job(id, reason) {
   const client = await pool.connect();
@@ -781,6 +788,81 @@ app.post("/pending-patches/:id/claim", apiRateLimit, authMiddleware, async (req,
     res.json({ ok: true, patch: result.rows[0] });
   } catch (err) {
     console.error("[POST /pending-patches/:id/claim]", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ─── pending_commands endpoints ─────────────────────────────────────────────────
+
+// Agent polls for unclaimed commands for its device
+app.get("/pending-commands", apiRateLimit, authMiddleware, async (req, res) => {
+  const deviceId = s(req.query.device_id, 100);
+  if (!deviceId) return res.status(400).json({ error: "device_id is required" });
+
+  try {
+    const result = await pool.query(
+      "SELECT id, command, created_at FROM pending_commands WHERE device_id = $1 AND claimed_at IS NULL AND completed_at IS NULL ORDER BY created_at ASC",
+      [deviceId]
+    );
+    res.json({ commands: result.rows });
+  } catch (err) {
+    console.error("[GET /pending-commands]", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Agent claims a command atomically before executing it
+app.post("/pending-commands/:id/claim", apiRateLimit, authMiddleware, async (req, res) => {
+  const id = sint(req.params.id);
+  if (!id) return res.status(400).json({ error: "id is required" });
+
+  try {
+    const result = await pool.query(
+      "UPDATE pending_commands SET claimed_at = now() WHERE id = $1 AND claimed_at IS NULL RETURNING id",
+      [id]
+    );
+    if (!result.rows.length) return res.status(409).json({ error: "already claimed or not found" });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[POST /pending-commands/:id/claim]", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Agent marks a command complete
+app.post("/pending-commands/:id/complete", apiRateLimit, authMiddleware, async (req, res) => {
+  const id = sint(req.params.id);
+  if (!id) return res.status(400).json({ error: "id is required" });
+  const result_text = (req.body && req.body.result) || null;
+
+  try {
+    await pool.query(
+      "UPDATE pending_commands SET completed_at = now(), result = $2 WHERE id = $1",
+      [id, result_text]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[POST /pending-commands/:id/complete]", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Frontend enqueues a force check-in command for a device
+app.post("/api/force-checkin", apiRateLimit, authMiddleware, async (req, res) => {
+  const { deviceId } = req.body;
+  if (!deviceId || typeof deviceId !== "string") return res.status(400).json({ error: "deviceId is required" });
+
+  const command = 'check_in';
+  if (!ENQUEUE_ALLOWED.has(command)) return res.status(400).json({ error: "command not allowed" });
+
+  try {
+    const result = await pool.query(
+      "INSERT INTO pending_commands (device_id, command) VALUES ($1, $2) RETURNING id",
+      [s(deviceId, 100), command]
+    );
+    res.status(201).json({ ok: true, id: result.rows[0].id });
+  } catch (err) {
+    console.error("[POST /api/force-checkin]", err.message);
     res.status(500).json({ error: "Internal server error" });
   }
 });
