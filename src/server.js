@@ -648,37 +648,52 @@ app.post("/patch-jobs/:id/cancel", apiRateLimit, authMiddleware, async (req, res
   try {
     await client.query("BEGIN");
 
-    // Lock the patch_jobs row so claim and cancel serialize — whichever transaction
-    // grabs the lock first wins; the other sees the committed result.
-    const jobResult = await client.query(
-      "SELECT id, status, claimed_at FROM patch_jobs WHERE id = $1 FOR UPDATE",
+    // Lock the pending_patches row so claim and cancel serialize on the correct table.
+    // claimed_at lives on pending_patches, not patch_jobs.
+    // Whichever transaction grabs the lock first wins; the other sees the committed result.
+    const pendingResult = await client.query(
+      "SELECT claimed_at FROM pending_patches WHERE id = $1 FOR UPDATE",
       [s(id, 100)]
     );
 
-    if (jobResult.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({ error: "Job not found" });
+    if (pendingResult.rows.length === 0) {
+      // CASE A: no pending_patches row -- job is in the undo window (silent mode, not yet
+      // enqueued) or was never enqueued. Check patch_jobs for existence and status.
+      // undo window cancel -- pending_patches not yet enqueued;
+      // setTimeout will see cancelled status and skip the insert
+      const jobResult = await client.query(
+        "SELECT status FROM patch_jobs WHERE id = $1",
+        [s(id, 100)]
+      );
+      if (jobResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Job not found" });
+      }
+      if (jobResult.rows[0].status === "cancelled") {
+        await client.query("ROLLBACK");
+        return res.json({ ok: true });
+      }
+      await client.query(
+        "UPDATE patch_jobs SET status = 'cancelled', completed_at = now() WHERE id = $1 AND status = 'queued'",
+        [s(id, 100)]
+      );
+      await client.query("COMMIT");
+      console.log(`[Cancel] Job ${id} cancelled in undo window`);
+      return res.json({ ok: true });
     }
 
-    const job = jobResult.rows[0];
+    const pending = pendingResult.rows[0];
 
-    if (["success", "completed", "failed", "cancelled"].includes(job.status)) {
-      await client.query("ROLLBACK");
-      return res.status(409).json({
-        error: `Job is already ${job.status} and cannot be cancelled`,
-        status: job.status,
-      });
-    }
-
-    if (job.claimed_at) {
+    if (pending.claimed_at) {
+      // CASE B: row exists and is claimed -- agent already picked it up
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "already picked up by agent" });
     }
 
-    // Unclaimed — cancel atomically
+    // CASE C: row exists, not yet claimed -- cancel atomically
     await client.query("DELETE FROM pending_patches WHERE id = $1", [s(id, 100)]);
     await client.query(
-      "UPDATE patch_jobs SET status = 'cancelled', completed_at = now() WHERE id = $1",
+      "UPDATE patch_jobs SET status = 'cancelled', completed_at = now() WHERE id = $1 AND status = 'queued'",
       [s(id, 100)]
     );
     await client.query("COMMIT");
@@ -730,6 +745,16 @@ app.post("/patch", apiRateLimit, authMiddleware, async (req, res) => {
     // via the patch_jobs status check on the cancel endpoint... TODO: use a flag/abort)
     setTimeout(async () => {
       try {
+        // Guard: skip insert if job was cancelled during the undo window
+        const check = await pool.query(
+          "SELECT status FROM patch_jobs WHERE id = $1",
+          [id]
+        );
+        if (!check.rows.length || check.rows[0].status !== "queued") {
+          console.log("[Patch] deferred enqueue skipped -- job " + id + " is " +
+            (check.rows[0] ? check.rows[0].status : "gone"));
+          return;
+        }
         await pool.query(
           "INSERT INTO pending_patches (id, device_id, label, app_name, mode, created_at) VALUES ($1, $2, $3, $4, $5, now())",
           [id, s(deviceId, 100), s(label, 100), s(appName), resolvedMode]
