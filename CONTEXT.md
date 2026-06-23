@@ -1,6 +1,6 @@
 # OrchardPatch -- Project Context
 
-Last updated: June 22, 2026 (Phase 6 fully complete on both machines; Patch History UI overhaul; GITHUB_TOKEN secured in config.json)
+Last updated: June 22, 2026 (Phase 6 fully complete on both machines; Patch History UI overhaul; GITHUB_TOKEN secured in config.json; version-resolver design settled by Opus)
 
 ## What OrchardPatch is
 A Mac admin tool providing complete visibility into managed macOS fleet apps
@@ -620,9 +620,9 @@ in the server POST /patch handler. The proxy passes mode through as-is.
 - Branch, Bushel, Orchard patch modals. Cancel buttons. Auth wall.
 
 ### Designed, not built
-- Version-resolver redesign: server-side, source-pluggable resolver. Problem
-  statement written. Phase 6 now fully verified -- ready to schedule Opus Deep
-  Dive in Architectural Deep Dives channel.
+- Version-resolver redesign: DESIGN SETTLED (Opus, June 22, 2026). See
+  "Version-Resolver Redesign" section below for full design doc. Ready for
+  Phase A implementation in Sonnet.
 
 ### Not yet built (priority order)
 1. Version-resolver redesign -- Opus Deep Dive. READY TO SCHEDULE.
@@ -686,8 +686,9 @@ in the server POST /patch handler. The proxy passes mode through as-is.
   rejects to null. Version normalization deferred to resolver redesign.
 
 ## Next session priority order
-1. Version-resolver redesign Deep Dive (Opus, Architectural Deep Dives channel).
-   Phase 6 is fully verified -- this is now unblocked. Do NOT start in Sonnet.
+1. Version-resolver Phase A implementation (Sonnet, this chat). Design is
+   locked. Schema: app_identity + resolved_versions. Bootstrap app_identity
+   from installed bundle IDs + download URL parsing. No UI change.
 2. Console UI redesign sequencing Deep Dive (Opus). Outreach gate.
 3. Phase 7: Force reinstall (Sonnet, this chat).
 4. MAS app detection (Sonnet, this chat).
@@ -803,6 +804,125 @@ brand session. No piecemeal color changes in the interim.
   in the same commit.
 - For large Chip output, ask Chip to write to a Desktop file so Jude can
   copy from a text editor. Telegram blocks large clipboard copies.
+
+## Version-Resolver Redesign (design settled June 22, 2026)
+Full design doc from Opus Architectural Deep Dive. Status: DESIGN SETTLED.
+Implementation starts at Phase A (Sonnet).
+
+### The core model
+Two numbers per app, not one:
+- latest_patchable: what OrchardPatch can deliver right now (Installomator).
+  Existing latest_versions pipeline, unchanged.
+- latest_available: what the vendor has shipped. New server-side resolver.
+
+"Outdated" becomes a three-number relationship: installed, patchable, available.
+
+### Four states
+- Current: installed == available. Collapse to one number.
+- Patchable: installed < patchable. Green button (OrchardPatch owns this).
+- Lagging: installed < available AND patchable < available. No button.
+  Message: "Vendor released X. Installomator can patch to Y. Update available
+  when the Installomator label catches up."
+- Unknown: comparison cannot be computed safely. Fail toward visibility, never
+  toward Current.
+
+An app can be BOTH patchable and lagging (installed < patchable < available).
+Show the green button AND the lagging note.
+
+### Identity model
+Canonical identity = the installed app's real CFBundleIdentifier (bundle_id
+from apps table). NOT the Installomator label (fragments lack bundleID).
+
+New table: app_identity
+  bundle_id TEXT PRIMARY KEY -- real CFBundleIdentifier
+  app_name TEXT
+  installomator_label TEXT -- nullable
+  homebrew_cask TEXT -- nullable
+  github_repo TEXT -- nullable, "owner/repo"
+  sparkle_feed_url TEXT -- nullable
+  adam_id TEXT -- nullable, MAS App Store ID (future mas)
+  curated BOOLEAN DEFAULT false -- true = hand-curated, never auto-overwritten
+  last_derived TIMESTAMPTZ
+
+Two tiers: curated (DB rows, curated=true, win over derivation, JSON export/
+import for auditability -- NOT a file; multi-tenancy requires DB storage) and
+derived (auto-computed: installomator_label from name matching, homebrew_cask
+from bulk JSON fetch, github_repo + sparkle_feed_url from download URLs already
+in app_catalog).
+
+Solves as side effects: Telegram label mismatch (two bundle IDs = two rows),
+MAS app generalization (adam_id column, same identity model).
+
+### Source plugin model
+Each source: { name, trust, resolve(identifier) -> {version, sourceUrl} | null,
+policy: {minIntervalMs, batchable} }.
+
+Build order:
+1. Homebrew -- one bulk JSON fetch (formulae.brew.sh/api/cask.json), matched
+   locally. Best value-per-effort.
+2. Sparkle -- per-app appcast XML, parse newest enclosure shortVersionString.
+3. GitHub releases -- GET /repos/:owner/:repo/releases/latest, filter pre-releases.
+4. Vendor API -- later, per-adapter, high-value apps only.
+5. mas / App Store -- later, with mas work.
+
+Precedence policy: record ALL candidates in JSONB, pick trust-ranked winner,
+set conflict flag on disagreements. Do NOT auto-resolve. After real data,
+pick a real policy. Store disagreement; it is data.
+
+Version comparison: use semver.coerce + documented fallback. Coercion failure
+-> Unknown, never Current. Date/build-versioned labels (boxdrive, nomad, Teams)
+stay Unknown; no special-casing in this phase.
+
+### Schema
+resolved_versions:
+  bundle_id TEXT PRIMARY KEY -- joins to installed apps via app_identity
+  latest_available TEXT
+  source TEXT -- winning source name
+  source_url TEXT -- provenance URL
+  candidates JSONB -- every source's result this cycle
+  conflict BOOLEAN DEFAULT false
+  resolved_at TIMESTAMPTZ
+  error TEXT
+
+latest_versions (Installomator-sourced latest_patchable) stays exactly as-is.
+Two tables, two pipelines, joined at read time.
+
+### Execution model
+Server-side, global, scheduled (daily cron to start). NOT per-agent.
+Resolve only bundle IDs that actually appear on the fleet (~60-90 apps).
+Not all 1,137 catalog labels.
+Null-safe writes: same CASE WHEN guard pattern as commit d96ea73.
+
+### UI threading (Phase D)
+New per-app shape from GET /apps/status:
+  { installed_version, latest_patchable, latest_available, state,
+    patchable_now, lagging }
+Backward compat: keep returning patch_status during migration.
+Retire old field only AFTER frontend is switched.
+Dashboard: split outdated count into "X patchable" + "Y lagging".
+
+### Implementation phases
+- Phase A: identity + schema. Create app_identity + resolved_versions.
+  Bootstrap from installed bundle IDs + download URL parsing. No UI change.
+  Pure addition, nothing to break.
+- Phase B: first source: Homebrew. Bulk fetch, local match, write
+  latest_available. Validate against known apps (Slack, Firefox). Verify in DB.
+- Phase C: Sparkle + GitHub + candidate recording + conflict flag.
+- Phase D: UI threading. Expand /apps/status, three-number display,
+  dashboard split. Retire old field after switch.
+- Phase E: DEFERRED. Move latest_patchable resolution server-side (retire
+  per-agent scrape). Riskiest, least urgent. Out of scope for this redesign.
+
+### Settled decisions (June 22, 2026)
+1. Precedence policy: record all candidates (JSONB), trust-ranked winner,
+   flag conflicts. No auto-resolution yet.
+2. Curated identity mappings: DB rows (curated=true), JSON export/import.
+   NOT a file. Multi-tenancy is the decider.
+3. Installomator scrape: stays. Phase E explicitly out of scope.
+4. Coercion failure direction: Unknown, never Current.
+5. Cadence: daily cron. Per-source politeness within that.
+
+---
 
 ## Lessons learned (June 22 -- this session)
 - LaunchDaemon plists are world-readable (644 by default). Never put secrets
