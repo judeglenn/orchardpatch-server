@@ -94,6 +94,29 @@ async function migrate() {
     CREATE INDEX IF NOT EXISTS idx_latest_versions_label ON latest_versions(label);
     CREATE INDEX IF NOT EXISTS idx_app_catalog_bundle ON app_catalog(bundle_id);
 
+    CREATE TABLE IF NOT EXISTS app_identity (
+      bundle_id TEXT PRIMARY KEY,
+      app_name TEXT,
+      installomator_label TEXT,
+      homebrew_cask TEXT,
+      github_repo TEXT,
+      sparkle_feed_url TEXT,
+      adam_id TEXT,
+      curated BOOLEAN DEFAULT false,
+      last_derived TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS resolved_versions (
+      bundle_id TEXT PRIMARY KEY,
+      latest_available TEXT,
+      source TEXT,
+      source_url TEXT,
+      candidates JSONB,
+      conflict BOOLEAN DEFAULT false,
+      resolved_at TIMESTAMPTZ,
+      error TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS pending_commands (
       id SERIAL PRIMARY KEY,
       device_id TEXT NOT NULL,
@@ -149,6 +172,11 @@ async function migrate() {
   // Add last_synced column to app_catalog if it doesn't exist
   await pool.query(`
     ALTER TABLE app_catalog ADD COLUMN IF NOT EXISTS last_synced TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'));
+  `).catch(() => {});
+
+  // Add download_url column to app_catalog (Phase A)
+  await pool.query(`
+    ALTER TABLE app_catalog ADD COLUMN IF NOT EXISTS download_url TEXT;
   `).catch(() => {});
 
   console.log("[DB] Schema ready");

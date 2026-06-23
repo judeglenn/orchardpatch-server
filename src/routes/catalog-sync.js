@@ -35,10 +35,14 @@ function parseFragment(content) {
     const match = content.match(new RegExp(`^\\s*${key}="?([^"\\n]+)"?`, "m"));
     return match ? match[1].trim() : null;
   };
+  // downloadURL may be quoted with double or single quotes, or unquoted.
+  // Dynamic values (curl, variable expansion) won't match — resolves to null (correct).
+  const downloadMatch = content.match(/^\s*downloadURL=["']?([^"'\n\s${}]+)["']?/m);
   return {
     app_name: get("name"),
     bundle_id: get("bundleID"),
     expected_team: get("expectedTeamID"),
+    download_url: downloadMatch ? downloadMatch[1].trim() : null,
   };
 }
 
@@ -78,13 +82,14 @@ router.post("/", async (req, res) => {
       const parsed = parseFragment(content);
 
       await pool.query(`
-        INSERT INTO app_catalog (label, app_name, bundle_id, expected_team)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO app_catalog (label, app_name, bundle_id, expected_team, download_url)
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT(label) DO UPDATE SET
           app_name = EXCLUDED.app_name,
           bundle_id = EXCLUDED.bundle_id,
-          expected_team = EXCLUDED.expected_team
-      `, [label, parsed.app_name, parsed.bundle_id, parsed.expected_team]);
+          expected_team = EXCLUDED.expected_team,
+          download_url = EXCLUDED.download_url
+      `, [label, parsed.app_name, parsed.bundle_id, parsed.expected_team, parsed.download_url]);
       results.upserted++;
     } catch (err) {
       console.error(`[catalog-sync] Failed ${label}:`, err.message);
