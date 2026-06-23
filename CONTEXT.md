@@ -1,6 +1,9 @@
 # OrchardPatch -- Project Context
 
-Last updated: June 22, 2026 (Phase 6 fully complete on both machines; Patch History UI overhaul; GITHUB_TOKEN secured in config.json; version-resolver design settled by Opus)
+Last updated: June 22, 2026 (Two Architectural Deep Dives settled this session:
+version-resolver redesign DESIGN LOCKED, console UI sequencing decided
+resolver-first. Resolver Phase A ready to spec for Sonnet. See
+version-resolver-design.md committed alongside this file.)
 
 ## What OrchardPatch is
 A Mac admin tool providing complete visibility into managed macOS fleet apps
@@ -286,16 +289,92 @@ Frontend (commits b8d6ee2, 401ade9):
 - Cancel logic (Phase 6): SELECT ... FOR UPDATE on pending_patches serializes
   claim/cancel. Three cases: undo window (Case A), claimed (409), unclaimed.
 
-## Version comparison philosophy
-"Latest version" in OrchardPatch = latest version Installomator knows how
-to install, not manufacturer's current release. This ensures outdated always
-means "patchable right now." Occasional 1-2 day lag between vendor release
-and Installomator catching up is by design.
-NOTE: the queued version-resolver redesign (server-side, multi-source) puts
-this invariant under tension -- sources like Homebrew/Sparkle/vendor APIs give
-the manufacturer's current release, which can be AHEAD of what the
-Installomator label installs. Reconciling "latest that exists" vs "latest
-Installomator can deliver" is the central decision in that Deep Dive.
+## Version model (REDESIGN DESIGN LOCKED June 22 -- see version-resolver-design.md)
+The single-number invariant is being replaced by a two-number model. Full
+design and rationale in version-resolver-design.md (committed alongside).
+Summary of what was decided:
+
+- Two numbers, two pipelines:
+  - latest_patchable: what OrchardPatch can deliver now. Installomator-sourced
+    (the existing latest_versions pipeline). UNCHANGED by the redesign.
+  - latest_available: the newest release that exists from the vendor. NEW
+    server-side, multi-source resolver (Homebrew, Sparkle, GitHub, vendor API,
+    later mas).
+- "Outdated" stops being a boolean. It is the relationship between three
+  numbers: installed, patchable, available. Four states: current, patchable,
+  lagging (vendor ahead of Installomator), unknown.
+- "Show both, the gap is a feature." The lagging state is the OrchardPatch
+  wedge made visible AND the automated Installomator-contribution signal
+  (it shows which labels are behind their vendors).
+- Identity keyed on the installed app's REAL bundle ID (CFBundleIdentifier from
+  the installed .app, which the agent already reports). This is viable even
+  though bundleID is dead in the Installomator FRAGMENT corpus -- two different
+  corpora. A new app_identity mapping table maps bundle_id to each source's
+  token. This identity model also dissolves the Telegram label mismatch (MAS
+  vs Desktop have different bundle IDs) and absorbs MAS detection/patching.
+- LOCKED DECISIONS: record all source candidates (JSONB) + trust-ranked winner
+  + conflict flag (decide real precedence after real data); curated identity
+  mappings live in DB rows (curated=true) with JSON export/import, NOT a file
+  (multi-tenancy is the decider); Installomator scrape stays (server-side
+  patchable resolution is deferred Phase E, out of scope); failed version
+  coercion resolves to Unknown never Current (fail toward visibility); daily
+  cron cadence with per-source politeness.
+- Build order: Phase A (identity + schema), B (Homebrew source), C (Sparkle +
+  GitHub + candidates), D (UI threading). Phase E (retire per-agent scrape)
+  deferred and out of scope. A-D never touch the working patchable pipeline.
+  NOTE: per the console sequencing decision below, the console redesign absorbs
+  resolver Phase D (the resolver-affected surfaces get built once, in the new
+  aesthetic, against real data).
+
+Old philosophy note (still true for the patchable number specifically):
+"Latest patchable" = latest version Installomator knows how to install, not
+manufacturer's current release. Occasional 1-2 day lag between vendor release
+and Installomator catching up is expected. The redesign no longer HIDES that
+lag; it surfaces it as the gap between patchable and available.
+
+## Roadmap sequencing (DECIDED June 22, console UI Deep Dive)
+Decision: RESOLVER-FIRST. Outreach is timed to the resolver (the
+differentiator), not merely to the console.
+
+Reasoning:
+- Outreach gates on three things, not one: polished console, a demo worth
+  watching, polished repo. The console is necessary but NOT sufficient. A
+  MacAdmins audience knows Installomator cold -- a UI on top of it reads as
+  "neat." The resolver's lagging state ("we tell you when Installomator itself
+  is behind the vendor") is the only thing that reads as genuinely new. So the
+  binding constraint on GREAT outreach is the resolver, not the console.
+- Resolver matching quality is the big unknown and sits UPSTREAM of console
+  design (what data will the dashboard show?). De-risk it before designing the
+  surfaces that display it.
+- Competitive window is 18-24 months. No acute pressure forcing rushed,
+  undifferentiated outreach. Do it once, well.
+
+Decided sequence:
+1. Resolver Phase A (identity + schema) + MAS detection riding on the same
+   identity model. Sonnet.
+2. Resolver Phase B (Homebrew source, real data). Sonnet.
+3. Resolver Phase C (Sparkle + GitHub + candidate recording). Sonnet.
+4. Make the primary-green call (lime #7dd94a vs hunter ~#355E3B + core
+   neutrals) somewhere in that window. Bounded, NOT the full brand session.
+5. Console redesign, all surfaces, new aesthetic, FULLY TOKENIZED (zero
+   hardcoded hex so the lime-to-hunter swap is a token change), building the
+   resolver IA against now-real data. This ABSORBS resolver Phase D.
+6. Demo video + polished repo.
+7. Outreach (MacAdmins Slack + contribution-first maintainer contact).
+
+Key constraints carried out of the Deep Dive:
+- Console redesign MUST be tokenized. Redesigning in lime when hunter is the
+  decided future would be polishing-what-you've-decided-to-replace. Tokens
+  dissolve that: a tokenized color is a variable, not throwaway work.
+- The console redesign hosts the resolver IA as designed-but-empty slots
+  (dashboard patchable/lagging split; app-detail three-number display that
+  collapses to one when there's no available data). Possible WITHOUT rework
+  only because the resolver was designed first. Renders zero/collapsed until
+  the resolver populates data.
+- MAS detection is a hidden DEMO GATE, not just polish. A demo showing a Patch
+  click that fails with exit 23 on Bitwarden/Canva is the kind of thing the
+  audience catches instantly. MAS detection uses the resolver Phase A identity
+  model, so it rides along cheaply.
 
 ## System app classification philosophy
 "System" = any app signed by Apple (com.apple.* bundle ID) or resident
@@ -314,6 +393,12 @@ mitigates the UX problem until proper detection is built.
 Fix needed: detect _MASReceipt at inventory time, set source='mas', hide
 Patch button, show "Managed by App Store" instead. Requires mas CLI for
 actual MAS patching (not yet built).
+NOTE (June 22): MAS detection now rides on resolver Phase A. The app_identity
+model classifies source at inventory time and holds adam_id, so the
+hide-button + "Managed by App Store" fix is cheap once Phase A exists. It is
+also a DEMO GATE (see Roadmap sequencing) -- a Patch click failing with exit 23
+in a demo/screenshot is the kind of break the audience catches. Do it with or
+right after Phase A, before any outreach screenshots.
 
 ## Label matching philosophy
 Bundle ID matching from fragments is not viable -- bundleID is effectively
@@ -620,34 +705,49 @@ in the server POST /patch handler. The proxy passes mode through as-is.
 - Branch, Bushel, Orchard patch modals. Cancel buttons. Auth wall.
 
 ### Designed, not built
-- Version-resolver redesign: DESIGN SETTLED (Opus, June 22, 2026). See
-  "Version-Resolver Redesign" section below for full design doc. Ready for
-  Phase A implementation in Sonnet.
+- Version-resolver redesign: DESIGN LOCKED June 22 (version-resolver-design.md).
+  Two-number model, bundle-ID identity, source plugin model, precedence by
+  recorded candidates, daily cron. Ready to spec Phase A for Sonnet. Phases A-D
+  scoped; Phase E (retire per-agent scrape) deferred and out of scope.
+- Console UI redesign: SEQUENCING DECIDED June 22 (resolver-first, tokenized,
+  hosts resolver IA, absorbs resolver Phase D). Execution comes after resolver
+  Phase C. See Roadmap sequencing section.
 
-### Not yet built (priority order)
-1. Version-resolver redesign -- Opus Deep Dive. READY TO SCHEDULE.
-2. Phase 7: Force reinstall in catalog modal (UNINSTALL=1). Schema change
+### Not yet built (priority order, RESEQUENCED June 22 -- resolver-first)
+1. Resolver Phase A: identity (app_identity) + resolved_versions schema +
+   bootstrap. Sonnet. MAS detection rides on this same identity model.
+2. Resolver Phase B: Homebrew source, real latest_available data. Sonnet.
+3. Resolver Phase C: Sparkle + GitHub sources + candidate recording. Sonnet.
+4. Primary-green call (lime vs hunter + core neutrals). Bounded, in the
+   resolver-build window.
+5. Console redesign: all surfaces, new aesthetic, FULLY TOKENIZED, hosts
+   resolver IA, absorbs resolver Phase D. Outreach gate.
+6. Demo video + polished repo.
+7. Outreach (MacAdmins Slack + maintainer).
+-- Then the previously-listed backlog, still valid, lower priority --
+8. Phase 7: Force reinstall in catalog modal (UNINSTALL=1). Schema change
    (force_reinstall BOOLEAN on pending_patches), POST /patch body change,
    agent reads flag and passes UNINSTALL=1 positional arg.
-3. MAS app detection: _MASReceipt at inventory time -> source='mas'. Hides
-   Patch button, shows "Managed by App Store."
-4. Installomator version + Update button on device detail.
-5. Console UI redesign -- ELEVATED to outreach-gate. Decide sequencing in
-   a Deep Dive. App UI must match waitlist aesthetic before screenshots.
-6. Agent update mechanism -- pkg build pipeline. PRE-LAUNCH GATE. See tech debt.
-7. Agent token rotation product feature.
-8. method='fruit' hardcode cleanup in POST /patch-jobs.
-9. Bushel modal pre-count cosmetic fix.
-10. "Clear by status" bulk action in Patch History. Full scope: clear all
+9. Installomator version + Update button on device detail.
+10. Agent update mechanism -- pkg build pipeline. PRE-LAUNCH GATE. See tech
+    debt. Opus Deep Dive (pkg pipeline vs server-pushed self-update).
+11. Agent token rotation product feature.
+12. method='fruit' hardcode cleanup in POST /patch-jobs.
+13. Bushel modal pre-count cosmetic fix.
+14. "Clear by status" bulk action in Patch History. Full scope: clear all
     failed, clear all cancelled, clear all queued, clear older than X (fixed
     options: 30/90/365 days), clear all. Design decisions needed: soft vs
     hard delete, fleet-wide vs filter-scoped, fixed date options vs date picker.
-11. Pinned Apps on Dashboard (needs preferences table).
-12. Automated catalog-sync schedule.
-13. Cultivation / policy-based auto-remediation.
-14. Multi-tenancy. PREREQUISITE for mutating pending_commands.
-15. SSO / proper auth. PREREQUISITE for mutating pending_commands.
-16. Graph reports, CLI/Homebrew tap, mas integration, Homebrew integration.
+15. Pinned Apps on Dashboard (needs preferences table).
+16. Automated catalog-sync schedule.
+17. Cultivation / policy-based auto-remediation.
+18. Multi-tenancy. PREREQUISITE for mutating pending_commands.
+19. SSO / proper auth. PREREQUISITE for mutating pending_commands.
+20. Graph reports, CLI/Homebrew tap, mas integration, Homebrew integration.
+NOTE: Resolver Phase E (move latest_patchable resolution server-side, retire
+the per-agent early-kill scrape) is deferred and explicitly OUT OF SCOPE for
+the resolver redesign. It is the original "wrong shape" fix but lowest urgency
+because the scrape works. Do not let it expand the resolver effort.
 
 ## Open items / tech debt
 - **AGENT UPDATE MECHANISM -- PRE-LAUNCH GATE.** No pkg build pipeline exists
@@ -672,7 +772,10 @@ in the server POST /patch handler. The proxy passes mode through as-is.
 - Telegram label mismatch: "Telegram (Mac App Store)" vs "Telegram Desktop"
   both mapped to 'telegram'. Different versioning schemes. Not investigated.
 - Last-known-good version held forever: staleness policy deferred to resolver.
-- Console UI redesign deferred -- elevated to outreach-gate.
+- Console UI redesign: SEQUENCING DECIDED June 22 (resolver-first). Execution
+  follows resolver Phase C. Hard constraint: fully tokenized (zero hardcoded
+  hex) so the deferred hunter-green swap is a token change. Hosts resolver IA
+  as empty slots, absorbs resolver Phase D. See Roadmap sequencing section.
 - GITHUB_TOKEN scoped to all public repos -- tighten to Installomator repo
   at next rotation (renewed May 12, 2026).
 
@@ -686,13 +789,21 @@ in the server POST /patch handler. The proxy passes mode through as-is.
   rejects to null. Version normalization deferred to resolver redesign.
 
 ## Next session priority order
-1. Version-resolver Phase A implementation (Sonnet, this chat). Design is
-   locked. Schema: app_identity + resolved_versions. Bootstrap app_identity
-   from installed bundle IDs + download URL parsing. No UI change.
-2. Console UI redesign sequencing Deep Dive (Opus). Outreach gate.
-3. Phase 7: Force reinstall (Sonnet, this chat).
-4. MAS app detection (Sonnet, this chat).
-5. Agent update mechanism -- pkg pipeline design (Opus, Architectural Deep Dives).
+1. Resolver Phase A spec (Sonnet, daily chat). Identity (app_identity table) +
+   resolved_versions schema + bootstrap (parse app_catalog download URLs for
+   GitHub/Sparkle, match installed bundle IDs, persist Installomator label
+   matches). MAS detection (_MASReceipt -> source='mas') rides on the same
+   identity model -- bundle into Phase A. Design is LOCKED in
+   version-resolver-design.md; this is well-scoped implementation, NOT Opus.
+2. Resolver Phase B spec (Sonnet). Homebrew source.
+3. Resolver Phase C spec (Sonnet). Sparkle + GitHub + candidate recording.
+4. Primary-green call (quick, can be a short Opus or even a Sonnet chat with
+   the waitlist palette as reference).
+5. Console redesign (Sonnet impl; design-system decisions may want care). Comes
+   AFTER resolver Phase C. Tokenized, hosts resolver IA, absorbs Phase D.
+NOTE: the resolver design Deep Dive is DONE. Phases A-C are Sonnet work. Do not
+re-open the design in Opus unless a genuine architectural question surfaces
+mid-build (e.g. matching quality forces a precedence rethink).
 
 ## Waitlist page (orchardpatch-waitlist repo)
 
@@ -739,6 +850,14 @@ GitHub PAT does not scope to this repo. Push via SSH only.
 Current brand green: #7dd94a (bright lime). Hunter green (~#355E3B range)
 is the preferred future direction. Full palette change deferred to a dedicated
 brand session. No piecemeal color changes in the interim.
+NOTE (June 22): the console redesign is the forcing function that makes the
+primary-green call load-bearing. Decision: make ONLY the primary-green call
+(lime vs hunter) plus core neutrals during the resolver-build window (step 4 of
+Roadmap sequencing). That is bounded, not the full brand session, and is NOT a
+piecemeal change -- it is the call that lets the console redesign happen in the
+final palette. The full palette (secondary colors, etc.) stays deferred. The
+console redesign MUST be fully tokenized regardless, so even the primary-green
+swap (and any later full-palette session) is a token change, not a re-skin.
 
 ## Lessons learned (June 12-13)
 - The single most valuable pattern: verify documented architecture against
@@ -805,125 +924,6 @@ brand session. No piecemeal color changes in the interim.
 - For large Chip output, ask Chip to write to a Desktop file so Jude can
   copy from a text editor. Telegram blocks large clipboard copies.
 
-## Version-Resolver Redesign (design settled June 22, 2026)
-Full design doc from Opus Architectural Deep Dive. Status: DESIGN SETTLED.
-Implementation starts at Phase A (Sonnet).
-
-### The core model
-Two numbers per app, not one:
-- latest_patchable: what OrchardPatch can deliver right now (Installomator).
-  Existing latest_versions pipeline, unchanged.
-- latest_available: what the vendor has shipped. New server-side resolver.
-
-"Outdated" becomes a three-number relationship: installed, patchable, available.
-
-### Four states
-- Current: installed == available. Collapse to one number.
-- Patchable: installed < patchable. Green button (OrchardPatch owns this).
-- Lagging: installed < available AND patchable < available. No button.
-  Message: "Vendor released X. Installomator can patch to Y. Update available
-  when the Installomator label catches up."
-- Unknown: comparison cannot be computed safely. Fail toward visibility, never
-  toward Current.
-
-An app can be BOTH patchable and lagging (installed < patchable < available).
-Show the green button AND the lagging note.
-
-### Identity model
-Canonical identity = the installed app's real CFBundleIdentifier (bundle_id
-from apps table). NOT the Installomator label (fragments lack bundleID).
-
-New table: app_identity
-  bundle_id TEXT PRIMARY KEY -- real CFBundleIdentifier
-  app_name TEXT
-  installomator_label TEXT -- nullable
-  homebrew_cask TEXT -- nullable
-  github_repo TEXT -- nullable, "owner/repo"
-  sparkle_feed_url TEXT -- nullable
-  adam_id TEXT -- nullable, MAS App Store ID (future mas)
-  curated BOOLEAN DEFAULT false -- true = hand-curated, never auto-overwritten
-  last_derived TIMESTAMPTZ
-
-Two tiers: curated (DB rows, curated=true, win over derivation, JSON export/
-import for auditability -- NOT a file; multi-tenancy requires DB storage) and
-derived (auto-computed: installomator_label from name matching, homebrew_cask
-from bulk JSON fetch, github_repo + sparkle_feed_url from download URLs already
-in app_catalog).
-
-Solves as side effects: Telegram label mismatch (two bundle IDs = two rows),
-MAS app generalization (adam_id column, same identity model).
-
-### Source plugin model
-Each source: { name, trust, resolve(identifier) -> {version, sourceUrl} | null,
-policy: {minIntervalMs, batchable} }.
-
-Build order:
-1. Homebrew -- one bulk JSON fetch (formulae.brew.sh/api/cask.json), matched
-   locally. Best value-per-effort.
-2. Sparkle -- per-app appcast XML, parse newest enclosure shortVersionString.
-3. GitHub releases -- GET /repos/:owner/:repo/releases/latest, filter pre-releases.
-4. Vendor API -- later, per-adapter, high-value apps only.
-5. mas / App Store -- later, with mas work.
-
-Precedence policy: record ALL candidates in JSONB, pick trust-ranked winner,
-set conflict flag on disagreements. Do NOT auto-resolve. After real data,
-pick a real policy. Store disagreement; it is data.
-
-Version comparison: use semver.coerce + documented fallback. Coercion failure
--> Unknown, never Current. Date/build-versioned labels (boxdrive, nomad, Teams)
-stay Unknown; no special-casing in this phase.
-
-### Schema
-resolved_versions:
-  bundle_id TEXT PRIMARY KEY -- joins to installed apps via app_identity
-  latest_available TEXT
-  source TEXT -- winning source name
-  source_url TEXT -- provenance URL
-  candidates JSONB -- every source's result this cycle
-  conflict BOOLEAN DEFAULT false
-  resolved_at TIMESTAMPTZ
-  error TEXT
-
-latest_versions (Installomator-sourced latest_patchable) stays exactly as-is.
-Two tables, two pipelines, joined at read time.
-
-### Execution model
-Server-side, global, scheduled (daily cron to start). NOT per-agent.
-Resolve only bundle IDs that actually appear on the fleet (~60-90 apps).
-Not all 1,137 catalog labels.
-Null-safe writes: same CASE WHEN guard pattern as commit d96ea73.
-
-### UI threading (Phase D)
-New per-app shape from GET /apps/status:
-  { installed_version, latest_patchable, latest_available, state,
-    patchable_now, lagging }
-Backward compat: keep returning patch_status during migration.
-Retire old field only AFTER frontend is switched.
-Dashboard: split outdated count into "X patchable" + "Y lagging".
-
-### Implementation phases
-- Phase A: identity + schema. Create app_identity + resolved_versions.
-  Bootstrap from installed bundle IDs + download URL parsing. No UI change.
-  Pure addition, nothing to break.
-- Phase B: first source: Homebrew. Bulk fetch, local match, write
-  latest_available. Validate against known apps (Slack, Firefox). Verify in DB.
-- Phase C: Sparkle + GitHub + candidate recording + conflict flag.
-- Phase D: UI threading. Expand /apps/status, three-number display,
-  dashboard split. Retire old field after switch.
-- Phase E: DEFERRED. Move latest_patchable resolution server-side (retire
-  per-agent scrape). Riskiest, least urgent. Out of scope for this redesign.
-
-### Settled decisions (June 22, 2026)
-1. Precedence policy: record all candidates (JSONB), trust-ranked winner,
-   flag conflicts. No auto-resolution yet.
-2. Curated identity mappings: DB rows (curated=true), JSON export/import.
-   NOT a file. Multi-tenancy is the decider.
-3. Installomator scrape: stays. Phase E explicitly out of scope.
-4. Coercion failure direction: Unknown, never Current.
-5. Cadence: daily cron. Per-source politeness within that.
-
----
-
 ## Lessons learned (June 22 -- this session)
 - LaunchDaemon plists are world-readable (644 by default). Never put secrets
   in EnvironmentVariables blocks. config.json at root:wheel 600 is the right
@@ -945,3 +945,35 @@ Dashboard: split outdated count into "X patchable" + "Y lagging".
 - Manual agent deploys are not a production update path. Every agent change
   currently requires a manual deploy -- this is a pre-launch gate, not a
   temporary inconvenience.
+
+## Lessons learned (June 22 -- Deep Dive session, resolver + console sequencing)
+- The single-number "outdated" invariant hid a quiet false-negative: vendor
+  ships a security fix, Installomator lags, dashboard says "current," fleet is
+  exposed. Two numbers (patchable + available) and a "lagging" state fix it,
+  AND the gap is a differentiator no competitor can state.
+- The installed app has a real CFBundleIdentifier even though bundleID is dead
+  in the Installomator fragment corpus. Two different corpora. Keying identity
+  on the installed bundle ID is the unlock that makes the resolver, MAS
+  detection, and the Telegram mismatch all fall out of one model.
+- Storage medium is decided by the FUTURE constraint, not present convenience.
+  Curated mappings go in the DB (not a file) because they become per-org at
+  multi-tenancy and per-org data cannot live in a shared repo. The
+  auditability Mac admins want comes from JSON export/import, not from the
+  storage being a file.
+- "Console UI redesign" was hiding a strategic decision about outreach timing.
+  The console is necessary but NOT sufficient for good outreach; the resolver
+  is the demo's differentiator. The binding constraint on GREAT outreach is the
+  resolver, so outreach is timed to it, not the console.
+- Doing the resolver Deep Dive BEFORE the console redesign means the console can
+  bake in the resolver IA as empty slots with zero rework. Order of design work
+  has downstream rework consequences. Design the data model before the surfaces
+  that show it.
+- Tokenization is the clean resolution to "don't polish what you've decided to
+  replace." A tokenized color is a variable, not throwaway work, so the
+  redesign can proceed in lime now and swap to hunter later for free.
+- Record candidates, decide precedence later. When a policy choice (which source
+  wins) depends on data you do not have yet, capture every input and defer the
+  choice. Same shape as the Phase 6 "do not ship a guess" lesson.
+- Failed version coercion resolves to Unknown, never Current. Fail-safe
+  direction is toward visibility, because hiding a possible gap is the exact
+  failure mode the redesign exists to kill.
