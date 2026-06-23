@@ -116,7 +116,7 @@ async function runHomebrew(pool) {
       ' candidates = EXCLUDED.candidates,' +
       ' conflict = false,' +
       ' resolved_at = now()',
-      [identity.bundle_id, cask.version, cask.homepage || '', candidates]
+      [identity.bundle_id, cask.version, 'homebrew', cask.homepage || '', candidates]
     );
     resolved++;
   }
