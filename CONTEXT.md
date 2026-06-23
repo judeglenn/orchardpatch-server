@@ -1,9 +1,9 @@
 # OrchardPatch -- Project Context
 
-Last updated: June 22, 2026 (Two Architectural Deep Dives settled this session:
-version-resolver redesign DESIGN LOCKED, console UI sequencing decided
-resolver-first. Resolver Phase A ready to spec for Sonnet. See
-version-resolver-design.md committed alongside this file.)
+Last updated: June 22, 2026 (Phase A shipped: app_identity + resolved_versions
+schema, identity bootstrap, MAS detection via _MASReceipt, Patch button hidden
+for MAS apps. 10 MAS apps confirmed on Jude's machine. config.json structure
+corrected in this file.)
 
 ## What OrchardPatch is
 A Mac admin tool providing complete visibility into managed macOS fleet apps
@@ -83,6 +83,23 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
   machines. Renewed May 12, 2026, scoped to all public repos -- tighten to
   Installomator repo at next rotation.
 
+## config.json structure (CORRECTED June 22)
+File: /etc/orchardpatch/config.json. root:wheel 600 on both machines.
+Actual structure (confirmed by inspection June 22):
+  {
+    "server": {
+      "url": "https://orchardpatch-server-production.up.railway.app",
+      "token": "<SERVER_TOKEN>"
+    },
+    "githubToken": "<GITHUB_TOKEN>"
+  }
+To read the server token in a shell one-liner:
+  python3 -c 'import json; d=json.load(open("/etc/orchardpatch/config.json")); print(d["server"]["token"])'
+NOTE: Previous CONTEXT.md notes implied a flat 'serverToken' top-level key.
+That was wrong. The actual path is d["server"]["token"].
+applyConfigEnv() in scheduler.js reads config.server.token and config.githubToken
+and writes them into process.env at startup.
+
 ## Installomator path and version
 - Canonical pkg-managed path: /usr/local/Installomator/Installomator.sh
   This is where the Installomator pkg (deployed via catalog) installs.
@@ -128,14 +145,13 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
   positional arg is read correctly, but DEBUG=1 only skips the INSTALL step,
   NOT the download. It does not give a download-free version check. See the
   version-checker.js section for the actual version-check approach.
-- Agent secrets (SERVER_TOKEN, GITHUB_TOKEN) live in /etc/orchardpatch/config.json,
+- Agent secrets (server token, GITHUB_TOKEN) live in /etc/orchardpatch/config.json,
   root:wheel 600. Plist contains no secrets. applyConfigEnv() in scheduler.js
   reads config at startup and writes values into process.env so child processes
   (version-checker spawns) inherit them automatically.
 - Exit code 23 from Installomator means "App previously installed from App
   Store -- Installomator respects the MAS installation and will not overwrite."
   This is correct behavior. MAS apps cannot be patched via Installomator.
-  Bitwarden and Canva are MAS installs on Jude's machine.
 - All fleet server calls from the frontend go through Next.js proxy routes.
   No direct browser-to-fleet-server calls exist as of June 16 (Phase 5).
   FLEET_SERVER_URL and FLEET_SERVER_TOKEN are server-side only env vars.
@@ -176,10 +192,10 @@ Agent (commit 9a2d75d and Phase 6 commit):
   report path). Unknown command types logged and marked complete with
   "ignored: unknown command type".
 - Conditional claim: returns null on 409, fast loop skips on null.
-- applyConfigEnv(): reads githubToken from config.json at startup, writes to
-  process.env so version-checker spawns inherit it. Falls back to existing
-  process.env.GITHUB_TOKEN if config field absent.
-- GITHUB_TOKEN now sourced from config.json (root:wheel 600), NOT plist.
+- applyConfigEnv(): reads server.token and githubToken from config.json at
+  startup, writes to process.env so version-checker spawns inherit them.
+  Falls back to existing process.env values if config fields absent.
+- Agent secrets now sourced from config.json (root:wheel 600), NOT plist.
 
 Frontend (commits b8d6ee2, 401ade9):
 - /api/force-checkin proxy route.
@@ -244,8 +260,7 @@ Frontend (commits b8d6ee2, 401ade9):
 - STRATEGIC NOTE: running Installomator per-agent to get the latest version is
   the wrong shape. Latest-version resolution is global, not per-device, and
   belongs on the server. The early-kill scrape is a flagged stopgap. A
-  server-side, source-pluggable resolver is queued as an Architectural Deep
-  Dive (problem statement written, ready to schedule).
+  server-side, source-pluggable resolver is the real fix (Phase B onward).
 
 ## Two-table write pattern (complete as of June 13)
 - pending_patches -- the agent work queue. Agent polls this table via the fast
@@ -319,12 +334,10 @@ Summary of what was decided:
   patchable resolution is deferred Phase E, out of scope); failed version
   coercion resolves to Unknown never Current (fail toward visibility); daily
   cron cadence with per-source politeness.
-- Build order: Phase A (identity + schema), B (Homebrew source), C (Sparkle +
-  GitHub + candidates), D (UI threading). Phase E (retire per-agent scrape)
-  deferred and out of scope. A-D never touch the working patchable pipeline.
-  NOTE: per the console sequencing decision below, the console redesign absorbs
-  resolver Phase D (the resolver-affected surfaces get built once, in the new
-  aesthetic, against real data).
+- Build order: Phase A (identity + schema) SHIPPED. Phase B (Homebrew source),
+  Phase C (Sparkle + GitHub + candidates), Phase D absorbed into console
+  redesign. Phase E (retire per-agent scrape) deferred and out of scope.
+  A-D never touch the working patchable pipeline.
 
 Old philosophy note (still true for the patchable number specifically):
 "Latest patchable" = latest version Installomator knows how to install, not
@@ -336,23 +349,9 @@ lag; it surfaces it as the gap between patchable and available.
 Decision: RESOLVER-FIRST. Outreach is timed to the resolver (the
 differentiator), not merely to the console.
 
-Reasoning:
-- Outreach gates on three things, not one: polished console, a demo worth
-  watching, polished repo. The console is necessary but NOT sufficient. A
-  MacAdmins audience knows Installomator cold -- a UI on top of it reads as
-  "neat." The resolver's lagging state ("we tell you when Installomator itself
-  is behind the vendor") is the only thing that reads as genuinely new. So the
-  binding constraint on GREAT outreach is the resolver, not the console.
-- Resolver matching quality is the big unknown and sits UPSTREAM of console
-  design (what data will the dashboard show?). De-risk it before designing the
-  surfaces that display it.
-- Competitive window is 18-24 months. No acute pressure forcing rushed,
-  undifferentiated outreach. Do it once, well.
-
 Decided sequence:
-1. Resolver Phase A (identity + schema) + MAS detection riding on the same
-   identity model. Sonnet.
-2. Resolver Phase B (Homebrew source, real data). Sonnet.
+1. Resolver Phase A -- SHIPPED June 22.
+2. Resolver Phase B (Homebrew source, real data). Sonnet. NEXT.
 3. Resolver Phase C (Sparkle + GitHub + candidate recording). Sonnet.
 4. Make the primary-green call (lime #7dd94a vs hunter ~#355E3B + core
    neutrals) somewhere in that window. Bounded, NOT the full brand session.
@@ -362,43 +361,40 @@ Decided sequence:
 6. Demo video + polished repo.
 7. Outreach (MacAdmins Slack + contribution-first maintainer contact).
 
-Key constraints carried out of the Deep Dive:
-- Console redesign MUST be tokenized. Redesigning in lime when hunter is the
-  decided future would be polishing-what-you've-decided-to-replace. Tokens
-  dissolve that: a tokenized color is a variable, not throwaway work.
+Key constraints:
+- Console redesign MUST be tokenized. Tokens dissolve the lime-vs-hunter
+  dilemma: a tokenized color is a variable, not throwaway work.
 - The console redesign hosts the resolver IA as designed-but-empty slots
   (dashboard patchable/lagging split; app-detail three-number display that
   collapses to one when there's no available data). Possible WITHOUT rework
-  only because the resolver was designed first. Renders zero/collapsed until
-  the resolver populates data.
-- MAS detection is a hidden DEMO GATE, not just polish. A demo showing a Patch
-  click that fails with exit 23 on Bitwarden/Canva is the kind of thing the
-  audience catches instantly. MAS detection uses the resolver Phase A identity
-  model, so it rides along cheaply.
+  only because the resolver was designed first.
+- MAS detection was a DEMO GATE -- now resolved (Phase A shipped).
 
 ## System app classification philosophy
 "System" = any app signed by Apple (com.apple.* bundle ID) or resident
 under /System/. Not patchable via Installomator, tracked separately from
 Unknown. Unknown means "third-party app with no Installomator label yet."
 
-## MAS app classification
+## MAS app classification (DETECTION SHIPPED -- Phase A)
 Apps installed from the Mac App Store have a _MASReceipt directory inside
 their .app bundle. Installomator exits 23 on these -- correct behavior,
 not a bug. MAS apps cannot be patched via Installomator regardless of version.
-Check: ls /Applications/AppName.app/Contents/_MASReceipt/
-Known MAS installs on Jude's machine: Bitwarden, Canva (and likely others).
-UI gap: Patch button currently shows for MAS apps and fails with exit 23.
-TL;DR summary surfaces "App is managed by the Mac App Store" on exit 23, which
-mitigates the UX problem until proper detection is built.
-Fix needed: detect _MASReceipt at inventory time, set source='mas', hide
-Patch button, show "Managed by App Store" instead. Requires mas CLI for
-actual MAS patching (not yet built).
-NOTE (June 22): MAS detection now rides on resolver Phase A. The app_identity
-model classifies source at inventory time and holds adam_id, so the
-hide-button + "Managed by App Store" fix is cheap once Phase A exists. It is
-also a DEMO GATE (see Roadmap sequencing) -- a Patch click failing with exit 23
-in a demo/screenshot is the kind of break the audience catches. Do it with or
-right after Phase A, before any outreach screenshots.
+Detection: agent checks path.join(appPath, 'Contents', '_MASReceipt') via
+fs.existsSync at inventory time. If present, sets source='mas' on the app.
+Precedence: system > mas > user.
+UI: Patch button is hidden for source='mas' apps on the app detail page.
+"App Store" shown in muted gray text instead. Verified end to end June 22.
+Known MAS installs on Jude's machine (device-GJM7N0XGL0), confirmed June 22:
+  ASUS Device Discovery, Bitwarden, Canva, Darkroom, DaVinci Resolve,
+  Developer, Slack, Telegram, Trello, Word (10 total)
+Known MAS installs on Chip's machine (device-C02D52QTML85): none detected.
+Slack on Chip's machine is a direct download (not MAS) -- has Patch button.
+Remaining gap: Branch/Bushel/Orchard modals still count MAS apps as patchable
+targets. The Fruit button hide is done; the multi-device patch exclusion is
+backlogged. MAS apps hitting Branch/Bushel will return exit 23 (handled in
+TL;DR), but ideally they'd be excluded from the queue.
+mas CLI for actual MAS patching: not yet built. adam_id column exists in
+app_identity for future use.
 
 ## Label matching philosophy
 Bundle ID matching from fragments is not viable -- bundleID is effectively
@@ -557,18 +553,22 @@ not hardcoded in logic. Future sources slot in naturally.
   61 apps · 2020 13" 2.3GHz Quad-Core Intel i7 16GB)
 - Agent installed via .pkg on both machines
 - Agent install path: /usr/local/orchardpatch/agent/
-- Config: /etc/orchardpatch/config.json (token rotated June 13; githubToken
-  added June 22). File is root:wheel 600 on both machines.
+- Config: /etc/orchardpatch/config.json. Structure: { server: { url, token },
+  githubToken }. root:wheel 600 on both machines.
 - Logs: /var/log/orchardpatch/agent.log (stdout),
   /var/log/orchardpatch/agent.error.log (stderr -- version-check ETIMEDOUT
   and "Command failed" lines land here, NOT in agent.log)
 - Device ID persisted to /var/root/.orchardpatch/device-id.json
 - Installomator: v10.8 (2025-03-28) on both machines, at
   /usr/local/Installomator/Installomator.sh. Updated June 16 via catalog.
-- Both machines: Phase 6 agent fully deployed and verified as of June 22.
+- Both machines: Phase 6 agent fully deployed. Phase A agent deployed June 22.
   Fast loop confirmed. version-checker rewrite live. GITHUB_TOKEN sourced
   from config.json on both.
-- Known MAS apps (not patchable via Installomator): Bitwarden, Canva (Jude)
+- Known MAS apps on Jude's machine: ASUS Device Discovery, Bitwarden, Canva,
+  Darkroom, DaVinci Resolve, Developer, Slack, Telegram, Trello, Word (10)
+  NOTE: Slack and Telegram on Jude's machine are MAS -- Patch button hidden.
+  Slack on Chip's machine is direct download -- Patch button shown.
+  DaVinci Resolve is MAS on Jude's machine; may be direct download on others.
 - Known outdated apps on device-C02D52QTML85: Ollama (large, avoid as test
   target), Slack (in active use, avoid), Telegram (label mismatch, see below)
 
@@ -578,7 +578,8 @@ not hardcoded in logic. Future sources slot in naturally.
 - apps: id, device_id, bundle_id, name, version, latest_version (legacy/
   null), is_outdated (legacy/always 0 -- do not use), installomator_label,
   path, source
-  source values: 'user' (third-party, patchable), 'system' (Apple-managed)
+  source values: 'user' (third-party, patchable), 'system' (Apple-managed),
+  'mas' (Mac App Store install, not patchable via Installomator) -- NEW Phase A
 - latest_versions: label (PK), latest_version, last_checked, error
   STATUS: 34/47 populated as of June 22.
   INGEST IS NULL-SAFE (commit d96ea73): the ON CONFLICT upsert guards
@@ -586,9 +587,21 @@ not hardcoded in logic. Future sources slot in naturally.
   THEN EXCLUDED ELSE existing. error and last_checked always update. A failed
   check records its error against the last-known-good version instead of
   wiping it.
-- app_catalog: label (PK), app_name, bundle_id, expected_team, last_synced
-  NOTE: bundle_id is null for effectively all rows -- 1,137 rows with real
-  app_name/expected_team data as of June 12.
+- app_catalog: label (PK), app_name, bundle_id, expected_team, last_synced,
+  download_url -- NEW Phase A. bundle_id null for effectively all rows.
+  download_url populated from the downloadURL field in Installomator fragments.
+  1,137 rows as of June 12 catalog sync.
+- app_identity: bundle_id (PK), app_name, installomator_label, homebrew_cask,
+  github_repo, sparkle_feed_url, adam_id, curated, last_derived -- NEW Phase A.
+  Bootstrapped from apps table on startup, after catalog-sync, and on each
+  check-in (for bundle_id+label pairs). curated=true rows never overwritten
+  by derivation. homebrew_cask/github_repo/sparkle_feed_url populated in
+  Phases B and C respectively.
+- resolved_versions: bundle_id (PK), latest_available, source, source_url,
+  candidates (JSONB), conflict, resolved_at, error -- NEW Phase A (schema only).
+  Populated starting Phase B. Joins to app_identity and installed apps via
+  bundle_id. Two tables, two pipelines: latest_versions (patchable) stays
+  unchanged; resolved_versions (available) is the new addition.
 - patch_jobs: id, device_id, app_name, label, mode, method, status,
   created_at, started_at, completed_at, exit_code, error, log
   method values: 'fruit', 'branch', 'bushel', 'orchard'
@@ -607,9 +620,8 @@ not hardcoded in logic. Future sources slot in naturally.
   patch_jobs.id for all methods.
   NOTE (Phase 6): for silent patches the row is WITHHELD for the 15-second
   undo window before being written.
-- pending_commands: NEW in Phase 6 (shipped June 22).
-  id SERIAL PK, device_id TEXT, command TEXT, created_at TIMESTAMPTZ,
-  claimed_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, result TEXT.
+- pending_commands: id SERIAL PK, device_id TEXT, command TEXT, created_at
+  TIMESTAMPTZ, claimed_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, result TEXT.
   command is a string; allowlist { check_in } only for now.
   result TEXT persists agent outcome ("ignored: unknown command type" or
   empty string for check_in success).
@@ -617,11 +629,15 @@ not hardcoded in logic. Future sources slot in naturally.
   Pinned Apps persistence on Dashboard.
 
 ## Key API endpoints
-- POST /checkin -- agent check-in, inventory push (includes installomator_label)
+- POST /checkin -- agent check-in, inventory push (includes installomator_label).
+  Phase A: also upserts bundle_id+label pairs into app_identity.
 - GET /devices -- fleet list with outdated_count (latest_versions join)
 - GET /apps -- raw app rows (do not use for status -- use /apps/status)
-- GET /apps/status?device_id= -- patch status per app with cache_age_seconds
-  patch_status values: 'outdated', 'current', 'unknown', 'na'
+- GET /apps/status?device_id= -- patch status per app with cache_age_seconds.
+  Returns source field as of Phase A. patch_status values: 'outdated',
+  'current', 'unknown', 'na'. KNOWN GAP: MAS apps may return patch_status
+  'outdated' because the CASE has no WHEN source='mas' THEN 'na' clause.
+  Frontend handles this correctly (MAS check is outermost). Fix in Phase B.
 - GET /stats -- fleet stats
 - POST /patch -- queue a Fruit patch job. Writes both tables atomically.
   NOTE (Phase 6): silent mode withholds pending_patches for 15s undo window.
@@ -636,7 +652,8 @@ not hardcoded in logic. Future sources slot in naturally.
 - GET /patch-jobs -- list jobs, supports ?device_id, ?method, ?mode, ?status
 - POST /api/version-sync/ingest -- ingest version data. Null-safe upsert.
 - GET /api/version-sync and /api/version-sync/:label -- cache lookups
-- POST /api/catalog-sync -- sync Installomator catalog from GitHub
+- POST /api/catalog-sync -- sync Installomator catalog from GitHub. Phase A:
+  also extracts download_url from fragments and triggers bootstrapIdentity.
 - GET /api/catalog -- browse catalog, ?search= supported, pagination
 - GET /pending-commands?device_id= -- agent polls for unclaimed commands
 - POST /pending-commands/:id/claim -- conditional claim, returns 409 if lost
@@ -666,15 +683,36 @@ in the server POST /patch handler. The proxy passes mode through as-is.
 
 ## Feature status
 
-### Shipped (June 22, 2026 -- this session)
-- **Phase 6 fully verified on both machines.** Jude's machine agent deployed,
-  fast loop confirmed, GITHUB_TOKEN confirmed loading from config.json.
-- **GITHUB_TOKEN secured.** Moved from plist to /etc/orchardpatch/config.json
-  (root:wheel 600) on both machines. applyConfigEnv() in scheduler.js reads
-  at startup. Plist contains no secrets. (commit 9a2d75d, agent repo)
-- **Patch History UI overhaul.** Flat list, formatDateTime ("Jun 22, 2026 at
-  6:32 PM"), Last Patch stat card updated. TL;DR summary on expanded log rows
-  with human-readable exit code mappings. exitCode added to PatchJob type.
+### Shipped (Phase A -- June 22, 2026)
+- **app_identity table.** bundle_id PK, installomator_label, homebrew_cask,
+  github_repo, sparkle_feed_url, adam_id, curated, last_derived. Schema in
+  src/db.js. (orchardpatch-server commit e301cbe)
+- **resolved_versions table.** Schema in src/db.js. Empty until Phase B.
+  (orchardpatch-server commit e301cbe)
+- **download_url on app_catalog.** Extracted from Installomator fragment
+  downloadURL field during catalog-sync. Regex captures static URLs only --
+  dynamic curl/variable expansions correctly resolve to null. Partial-URL
+  edge case documented as tech debt. (orchardpatch-server commit e301cbe)
+- **Identity bootstrap.** src/lib/identity-bootstrap.js. Runs on server
+  startup, after catalog-sync, and per check-in for new bundle_id+label pairs.
+  All three call sites wrapped in try/catch -- never blocks server start or
+  check-in. (orchardpatch-server commit e358bfe)
+- **source field in /apps/status response.** Added to SELECT and per-app
+  response object. (orchardpatch-server commit 0108214)
+- **MAS detection in agent.** inventory.js checks Contents/_MASReceipt via
+  fs.existsSync for each non-system app. Sets source='mas' if found. Confirmed:
+  10 MAS apps on Jude's machine, 0 on Chip's. (orchardpatch-agent commit)
+- **Patch button hidden for MAS apps.** App detail page fleet installations
+  table: if inst.source === 'mas', shows "App Store" muted text instead of
+  Patch button. MAS check is outermost (takes priority over isOutdated).
+  Normalizer in /api/fleet/apps/[id]/route.ts updated to pass source through.
+  (orchardpatch commit f75757d)
+
+### Shipped (June 22, 2026 -- prior session)
+- **Phase 6 fully verified on both machines.**
+- **GITHUB_TOKEN secured.** Moved from plist to config.json.
+- **Patch History UI overhaul.** Flat list, formatDateTime, TL;DR summary,
+  exitCode field, human-readable exit code mappings.
 
 ### Shipped (June 23, 2026 -- Phase 6 implementation)
 - **Phase 6: Force check-in.** Fast loop (60s) + slow loop (15min) agent
@@ -705,105 +743,112 @@ in the server POST /patch handler. The proxy passes mode through as-is.
 - Branch, Bushel, Orchard patch modals. Cancel buttons. Auth wall.
 
 ### Designed, not built
-- Version-resolver redesign: DESIGN LOCKED June 22 (version-resolver-design.md).
-  Two-number model, bundle-ID identity, source plugin model, precedence by
-  recorded candidates, daily cron. Ready to spec Phase A for Sonnet. Phases A-D
-  scoped; Phase E (retire per-agent scrape) deferred and out of scope.
+- Version-resolver Phases B-D: DESIGN LOCKED June 22 (version-resolver-design.md).
+  Phase A shipped. Phases B-D ready to spec. Phase D absorbed into console
+  redesign. Phase E deferred and out of scope.
 - Console UI redesign: SEQUENCING DECIDED June 22 (resolver-first, tokenized,
   hosts resolver IA, absorbs resolver Phase D). Execution comes after resolver
   Phase C. See Roadmap sequencing section.
 
-### Not yet built (priority order, RESEQUENCED June 22 -- resolver-first)
-1. Resolver Phase A: identity (app_identity) + resolved_versions schema +
-   bootstrap. Sonnet. MAS detection rides on this same identity model.
-2. Resolver Phase B: Homebrew source, real latest_available data. Sonnet.
-3. Resolver Phase C: Sparkle + GitHub sources + candidate recording. Sonnet.
-4. Primary-green call (lime vs hunter + core neutrals). Bounded, in the
+### Not yet built (priority order -- resolver-first)
+1. Resolver Phase B: Homebrew source. Bulk cask fetch, match against
+   app_identity, write latest_available to resolved_versions. Sonnet. NEXT.
+   Also include one-line patch_status fix: add WHEN a.source='mas' THEN 'na'
+   to the CASE in /apps/status. Bundle it -- it's trivial.
+2. Resolver Phase C: Sparkle + GitHub sources + candidate recording. Sonnet.
+3. Primary-green call (lime vs hunter + core neutrals). Bounded, in the
    resolver-build window.
-5. Console redesign: all surfaces, new aesthetic, FULLY TOKENIZED, hosts
+4. Console redesign: all surfaces, new aesthetic, FULLY TOKENIZED, hosts
    resolver IA, absorbs resolver Phase D. Outreach gate.
-6. Demo video + polished repo.
-7. Outreach (MacAdmins Slack + maintainer).
+5. Demo video + polished repo.
+6. Outreach (MacAdmins Slack + maintainer).
 -- Then the previously-listed backlog, still valid, lower priority --
-8. Phase 7: Force reinstall in catalog modal (UNINSTALL=1). Schema change
-   (force_reinstall BOOLEAN on pending_patches), POST /patch body change,
-   agent reads flag and passes UNINSTALL=1 positional arg.
-9. Installomator version + Update button on device detail.
-10. Agent update mechanism -- pkg build pipeline. PRE-LAUNCH GATE. See tech
-    debt. Opus Deep Dive (pkg pipeline vs server-pushed self-update).
-11. Agent token rotation product feature.
-12. method='fruit' hardcode cleanup in POST /patch-jobs.
-13. Bushel modal pre-count cosmetic fix.
-14. "Clear by status" bulk action in Patch History. Full scope: clear all
-    failed, clear all cancelled, clear all queued, clear older than X (fixed
-    options: 30/90/365 days), clear all. Design decisions needed: soft vs
-    hard delete, fleet-wide vs filter-scoped, fixed date options vs date picker.
+7. Phase 7: Force reinstall in catalog modal (UNINSTALL=1).
+8. Installomator version + Update button on device detail.
+9. Agent update mechanism -- pkg build pipeline. PRE-LAUNCH GATE. Opus Deep
+   Dive (pkg pipeline vs server-pushed self-update).
+10. Agent token rotation product feature.
+11. method='fruit' hardcode cleanup in POST /patch-jobs.
+12. Bushel modal pre-count cosmetic fix.
+13. MAS app exclusion from Branch/Bushel/Orchard queues. Currently MAS apps
+    can be queued and return exit 23. TL;DR surfaces correct message. Fix
+    properly: filter source='mas' apps out of multi-device patch queries.
+14. "Clear by status" bulk action in Patch History.
 15. Pinned Apps on Dashboard (needs preferences table).
 16. Automated catalog-sync schedule.
 17. Cultivation / policy-based auto-remediation.
 18. Multi-tenancy. PREREQUISITE for mutating pending_commands.
 19. SSO / proper auth. PREREQUISITE for mutating pending_commands.
-20. Graph reports, CLI/Homebrew tap, mas integration, Homebrew integration.
+20. Graph reports, CLI/Homebrew tap, mas CLI integration.
 NOTE: Resolver Phase E (move latest_patchable resolution server-side, retire
 the per-agent early-kill scrape) is deferred and explicitly OUT OF SCOPE for
-the resolver redesign. It is the original "wrong shape" fix but lowest urgency
-because the scrape works. Do not let it expand the resolver effort.
+the resolver redesign. Do not let it expand the resolver effort.
 
 ## Open items / tech debt
 - **AGENT UPDATE MECHANISM -- PRE-LAUNCH GATE.** No pkg build pipeline exists
   for agent updates. Current process is manual file copy + bootout/bootstrap.
-  This is not a viable user-facing update path. Required before real users are
-  onboarded: a signed pkg with a postinstall script that handles file
-  replacement, plist updates, and LaunchDaemon reload. Alternatively, a
-  server-pushed self-update via pending_commands (plumbing exists as of Phase 6).
-  Decision on which approach belongs in Architectural Deep Dives.
-- reportPatchJob() / waitForJob() in the scheduler: now unreachable dead code
-  since the fast loop does not await runPatchJob. Clean up in a future agent
-  deploy.
+  Required before real users are onboarded. Decision on approach (signed pkg
+  vs server-pushed self-update via pending_commands) belongs in Architectural
+  Deep Dives.
+- **patch_status CASE missing MAS clause.** GET /apps/status returns
+  patch_status='outdated' for MAS apps that happen to have a matching label.
+  Fix: add WHEN a.source = 'mas' THEN 'na' to the CASE in /apps/status.
+  One-line fix. Bundle into Phase B server work.
+- **downloadURL regex partial captures.** The regex [^"'\n\s${}]+ stops at $,
+  so a URL like "https://github.com/owner/repo/releases/download/v${appNewVersion}/file.dmg"
+  captures the partial prefix rather than null. Phase C will validate any
+  captured URL before using it, so a partial URL will fail gracefully. Tighten
+  the regex in Phase C when we start consuming download_url values.
+- **Identity bootstrap startup race.** Migration (CREATE TABLE) runs as a
+  side effect of require('./db') and is not awaited in server.js. bootstrapIdentity
+  could theoretically run before CREATE TABLE completes on a cold DB. In
+  practice the try/catch catches it and the next trigger succeeds. Fix properly
+  when migration is refactored to be explicitly awaited.
+- reportPatchJob() / waitForJob() in the scheduler: unreachable dead code.
+  Clean up in a future agent deploy.
 - KNOWN RACE in deferred enqueue: ~1ms window between SELECT status and INSERT
   in setTimeout guard. Documented in code. Fix before multi-tenancy: wrap in
   FOR UPDATE transaction.
 - postinstall script installs Installomator to /usr/local/bin/ -- conflicts
   with pkg convention. Fix or remove.
-- method='fruit' hardcode in POST /patch-jobs INSERT VALUES. Safe (ON CONFLICT
-  path preserves queue-time value) but dirty.
+- method='fruit' hardcode in POST /patch-jobs INSERT VALUES. Safe but dirty.
 - DB indexes: none on fleet queries or pending_commands. Fine at 2 devices.
 - agent_url column: unused, reserved for future server-initiated flows.
-- Telegram label mismatch: "Telegram (Mac App Store)" vs "Telegram Desktop"
-  both mapped to 'telegram'. Different versioning schemes. Not investigated.
+- Telegram label mismatch: Jude's machine has MAS Telegram (source='mas',
+  Patch button hidden -- resolved for that device). Chip's machine has Telegram
+  Desktop (direct download). The label mismatch ("Telegram (Mac App Store)" vs
+  "Telegram Desktop") remains an issue for Chip's machine. Deferred to resolver.
 - Last-known-good version held forever: staleness policy deferred to resolver.
 - Console UI redesign: SEQUENCING DECIDED June 22 (resolver-first). Execution
   follows resolver Phase C. Hard constraint: fully tokenized (zero hardcoded
-  hex) so the deferred hunter-green swap is a token change. Hosts resolver IA
-  as empty slots, absorbs resolver Phase D. See Roadmap sequencing section.
+  hex) so the deferred hunter-green swap is a token change.
 - GITHUB_TOKEN scoped to all public repos -- tighten to Installomator repo
   at next rotation (renewed May 12, 2026).
 
 ## Known label-matching issues
 - coconutBattery: label scrapes coconut-flavour.com, gets HTML back.
   Upstream Installomator bug. Save for maintainer outreach opener.
-- Telegram: see above.
-- DaVinci Resolve: may have a label -- verify and add override if so.
+- Telegram: MAS on Jude's machine (handled). Direct download on Chip's
+  machine -- label mismatch between "Telegram (Mac App Store)" and
+  "Telegram Desktop" still unresolved for device-C02D52QTML85.
+- DaVinci Resolve: MAS on Jude's machine. May be direct download elsewhere --
+  if so, verify label and add override. Different distributions of same app.
 - firefoxpkg: verify patches standard Firefox not ESR.
 - Date/build-versioned labels (boxdrive, nomad, Teams): version-shape guard
   rejects to null. Version normalization deferred to resolver redesign.
 
 ## Next session priority order
-1. Resolver Phase A spec (Sonnet, daily chat). Identity (app_identity table) +
-   resolved_versions schema + bootstrap (parse app_catalog download URLs for
-   GitHub/Sparkle, match installed bundle IDs, persist Installomator label
-   matches). MAS detection (_MASReceipt -> source='mas') rides on the same
-   identity model -- bundle into Phase A. Design is LOCKED in
-   version-resolver-design.md; this is well-scoped implementation, NOT Opus.
-2. Resolver Phase B spec (Sonnet). Homebrew source.
-3. Resolver Phase C spec (Sonnet). Sparkle + GitHub + candidate recording.
-4. Primary-green call (quick, can be a short Opus or even a Sonnet chat with
-   the waitlist palette as reference).
-5. Console redesign (Sonnet impl; design-system decisions may want care). Comes
-   AFTER resolver Phase C. Tokenized, hosts resolver IA, absorbs Phase D.
-NOTE: the resolver design Deep Dive is DONE. Phases A-C are Sonnet work. Do not
-re-open the design in Opus unless a genuine architectural question surfaces
-mid-build (e.g. matching quality forces a precedence rethink).
+1. Resolver Phase B: Homebrew source (Sonnet). Bulk fetch formulae.brew.sh/api/cask.json,
+   match casks against app_identity by name/app artifact, write homebrew_cask
+   field back to app_identity, write latest_available to resolved_versions.
+   Validate against known apps (Firefox, VS Code, etc.).
+   ALSO include in Phase B server commit: add WHEN a.source='mas' THEN 'na'
+   to /apps/status CASE (one-liner, no reason to defer further).
+2. Resolver Phase C: Sparkle + GitHub sources + candidate recording. Sonnet.
+3. Primary-green call. Bounded.
+4. Console redesign. Tokenized. After Phase C.
+NOTE: resolver design is DONE. Do not re-open in Opus unless a genuine
+architectural question surfaces mid-build.
 
 ## Waitlist page (orchardpatch-waitlist repo)
 
@@ -850,14 +895,12 @@ GitHub PAT does not scope to this repo. Push via SSH only.
 Current brand green: #7dd94a (bright lime). Hunter green (~#355E3B range)
 is the preferred future direction. Full palette change deferred to a dedicated
 brand session. No piecemeal color changes in the interim.
-NOTE (June 22): the console redesign is the forcing function that makes the
-primary-green call load-bearing. Decision: make ONLY the primary-green call
-(lime vs hunter) plus core neutrals during the resolver-build window (step 4 of
-Roadmap sequencing). That is bounded, not the full brand session, and is NOT a
-piecemeal change -- it is the call that lets the console redesign happen in the
-final palette. The full palette (secondary colors, etc.) stays deferred. The
-console redesign MUST be fully tokenized regardless, so even the primary-green
-swap (and any later full-palette session) is a token change, not a re-skin.
+NOTE (June 22): Decision: make ONLY the primary-green call (lime vs hunter)
+plus core neutrals during the resolver-build window (step 3 of current
+Roadmap sequencing). That is bounded, not the full brand session, and is NOT
+a piecemeal change -- it is the call that lets the console redesign happen in
+the final palette. The console redesign MUST be fully tokenized regardless,
+so even the primary-green swap is a token change, not a re-skin.
 
 ## Lessons learned (June 12-13)
 - The single most valuable pattern: verify documented architecture against
@@ -924,7 +967,7 @@ swap (and any later full-palette session) is a token change, not a re-skin.
 - For large Chip output, ask Chip to write to a Desktop file so Jude can
   copy from a text editor. Telegram blocks large clipboard copies.
 
-## Lessons learned (June 22 -- this session)
+## Lessons learned (June 22 -- prior session)
 - LaunchDaemon plists are world-readable (644 by default). Never put secrets
   in EnvironmentVariables blocks. config.json at root:wheel 600 is the right
   home for agent secrets.
@@ -957,23 +1000,37 @@ swap (and any later full-palette session) is a token change, not a re-skin.
   detection, and the Telegram mismatch all fall out of one model.
 - Storage medium is decided by the FUTURE constraint, not present convenience.
   Curated mappings go in the DB (not a file) because they become per-org at
-  multi-tenancy and per-org data cannot live in a shared repo. The
-  auditability Mac admins want comes from JSON export/import, not from the
-  storage being a file.
+  multi-tenancy and per-org data cannot live in a shared repo.
 - "Console UI redesign" was hiding a strategic decision about outreach timing.
-  The console is necessary but NOT sufficient for good outreach; the resolver
-  is the demo's differentiator. The binding constraint on GREAT outreach is the
-  resolver, so outreach is timed to it, not the console.
+  The resolver is the demo's differentiator. The binding constraint on GREAT
+  outreach is the resolver, not the console.
 - Doing the resolver Deep Dive BEFORE the console redesign means the console can
-  bake in the resolver IA as empty slots with zero rework. Order of design work
-  has downstream rework consequences. Design the data model before the surfaces
-  that show it.
+  bake in the resolver IA as empty slots with zero rework.
 - Tokenization is the clean resolution to "don't polish what you've decided to
-  replace." A tokenized color is a variable, not throwaway work, so the
-  redesign can proceed in lime now and swap to hunter later for free.
-- Record candidates, decide precedence later. When a policy choice (which source
-  wins) depends on data you do not have yet, capture every input and defer the
-  choice. Same shape as the Phase 6 "do not ship a guess" lesson.
+  replace." A tokenized color is a variable, not throwaway work.
+- Record candidates, decide precedence later. When a policy choice depends on
+  data you do not have yet, capture every input and defer the choice.
 - Failed version coercion resolves to Unknown, never Current. Fail-safe
-  direction is toward visibility, because hiding a possible gap is the exact
-  failure mode the redesign exists to kill.
+  direction is toward visibility.
+
+## Lessons learned (Phase A -- June 22, 2026)
+- config.json structure must be verified against actual file, not assumed from
+  docs. The actual structure is { server: { url, token }, githubToken } --
+  not a flat { serverToken, githubToken } as prior notes implied.
+- Never paste DATABASE_URL or credentials into the Chip chat. Credentials in
+  conversation logs are a security risk. Verify DB changes via indirect signals
+  (server health, application behavior) or Railway dashboard.
+- Server health + startup success is sufficient verification for additive
+  schema migrations. CREATE TABLE inside the startup pool.query block crashes
+  the server if it fails -- a healthy server is confirmation enough.
+- The checkin payload uses camelCase (bundleId, installomatorLabel, name).
+  Server-side SQL uses snake_case. Always confirm field names from actual
+  code before speccing SQL that references them.
+- A conditional guard (MAS check outermost in JSX) is cleaner than patching
+  the data model when the data is already correct. The Patch button hide
+  needed no backend change -- just the right conditional order in the frontend.
+- Verifying MAS detection requires a machine that actually has MAS apps.
+  Zero MAS apps on Chip's machine is the correct answer, not a bug.
+  Always check both machines when the feature is source-dependent.
+- DaVinci Resolve and Slack can be either MAS or direct download depending on
+  the machine. Do not assume uniform source across the fleet for the same app.
