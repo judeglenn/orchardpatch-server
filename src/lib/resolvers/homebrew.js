@@ -64,7 +64,7 @@ function findCask(identity, index) {
   return null;
 }
 
-async function runHomebrew(pool) {
+async function resolveHomebrew(pool) {
   console.log('[homebrew-resolver] starting');
 
   let casks;
@@ -73,7 +73,7 @@ async function runHomebrew(pool) {
     console.log('[homebrew-resolver] fetched ' + casks.length + ' casks');
   } catch (err) {
     console.error('[homebrew-resolver] fetch failed:', err.message);
-    return;
+    return new Map();
   }
 
   const index = buildCaskIndex(casks);
@@ -82,8 +82,8 @@ async function runHomebrew(pool) {
     'SELECT bundle_id, app_name, installomator_label FROM app_identity'
   );
 
+  const results = new Map();
   let matched = 0;
-  let resolved = 0;
 
   for (const identity of identities) {
     const cask = findCask(identity, index);
@@ -98,30 +98,16 @@ async function runHomebrew(pool) {
 
     if (!cask.version) continue;
 
-    const candidates = JSON.stringify([{
+    results.set(identity.bundle_id, {
       source: 'homebrew',
       token: cask.token,
       version: cask.version,
       url: cask.homepage || ''
-    }]);
-
-    await pool.query(
-      'INSERT INTO resolved_versions (bundle_id, latest_available, source, source_url, candidates, conflict, resolved_at)' +
-      ' VALUES ($1, $2, $3, $4, $5, false, now())' +
-      ' ON CONFLICT (bundle_id) DO UPDATE SET' +
-      ' latest_available = CASE WHEN EXCLUDED.latest_available IS NOT NULL AND EXCLUDED.latest_available <> \'\'' +
-      ' THEN EXCLUDED.latest_available ELSE resolved_versions.latest_available END,' +
-      ' source = EXCLUDED.source,' +
-      ' source_url = EXCLUDED.source_url,' +
-      ' candidates = EXCLUDED.candidates,' +
-      ' conflict = false,' +
-      ' resolved_at = now()',
-      [identity.bundle_id, cask.version, 'homebrew', cask.homepage || '', candidates]
-    );
-    resolved++;
+    });
   }
 
-  console.log('[homebrew-resolver] matched=' + matched + ' resolved=' + resolved + ' of ' + identities.length);
+  console.log('[homebrew-resolver] matched=' + matched + ' of ' + identities.length);
+  return results;
 }
 
-module.exports = { runHomebrew };
+module.exports = { resolveHomebrew };
