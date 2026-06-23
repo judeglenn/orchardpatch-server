@@ -122,13 +122,6 @@ async function runHomebrew(pool) {
   }
 
   console.log('[homebrew-resolver] matched=' + matched + ' resolved=' + resolved + ' of ' + identities.length);
-
-  const { rows: sample } = await pool.query(
-    'SELECT ai.app_name, rv.latest_available, rv.source FROM resolved_versions rv' +
-    ' JOIN app_identity ai ON ai.bundle_id = rv.bundle_id' +
-    ' ORDER BY rv.resolved_at DESC LIMIT 8'
-  );
-  console.log('[homebrew-resolver] sample rows:', JSON.stringify(sample));
 }
 
 module.exports = { runHomebrew };
