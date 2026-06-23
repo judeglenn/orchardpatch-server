@@ -7,6 +7,7 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
+const { bootstrapIdentity } = require("../lib/identity-bootstrap");
 
 const INSTALLOMATOR_TREE_API = "https://api.github.com/repos/Installomator/Installomator/git/trees/main?recursive=1";
 const RAW_BASE = "https://raw.githubusercontent.com/Installomator/Installomator/main";
@@ -96,6 +97,8 @@ router.post("/", async (req, res) => {
       results.errors++;
     }
   }
+
+  try { await bootstrapIdentity(pool); } catch (e) { console.error('identity bootstrap (catalog-sync):', e.message); }
 
   res.json({ ok: true, ...results, total: labelFiles.length });
 });

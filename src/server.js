@@ -7,6 +7,7 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const pool = require("./db");
+const { bootstrapIdentity } = require("./lib/identity-bootstrap");
 const versionSyncRouter = require("./routes/version-sync");
 const catalogSyncRouter = require("./routes/catalog-sync");
 
@@ -167,6 +168,19 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
             s(app.latestVersion, 100), app.isOutdated ? 1 : 0,
             s(app.installomatorLabel, 100), s(app.path, 500), s(app.source, 50), now]);
       }
+    }
+
+    // Identity upsert for apps with known Installomator labels
+    const identityApps = (apps || []).filter(a =>
+      a.bundleId && !a.bundleId.startsWith('com.apple.') && a.installomatorLabel
+    );
+    if (identityApps.length > 0) {
+      await Promise.all(identityApps.map(a =>
+        pool.query(
+          'INSERT INTO app_identity (bundle_id, app_name, installomator_label, last_derived) VALUES ($1, $2, $3, now()) ON CONFLICT (bundle_id) DO UPDATE SET app_name = EXCLUDED.app_name, installomator_label = COALESCE(EXCLUDED.installomator_label, app_identity.installomator_label), last_derived = now() WHERE NOT app_identity.curated',
+          [a.bundleId, a.name, a.installomatorLabel]
+        ).catch(e => console.error('identity upsert failed for', a.bundleId, e.message))
+      ));
     }
 
     console.log(`[CheckIn] ${device.hostname} — ${apps?.length || 0} apps`);
@@ -972,6 +986,9 @@ app.use((err, req, res, next) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`[OrchardPatch Server] Listening on port ${PORT}`);
-});
+(async () => {
+  try { await bootstrapIdentity(pool); } catch (e) { console.error('identity bootstrap failed:', e.message); }
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[OrchardPatch Server] Listening on port ${PORT}`);
+  });
+})();
