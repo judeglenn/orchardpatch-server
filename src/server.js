@@ -171,15 +171,15 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
       }
     }
 
-    // Identity upsert for apps with known Installomator labels
+    // Identity upsert for apps with known Installomator labels or Sparkle feeds
     const identityApps = (apps || []).filter(a =>
-      a.bundleId && !a.bundleId.startsWith('com.apple.') && a.installomatorLabel
+      a.bundleId && !a.bundleId.startsWith('com.apple.') && (a.installomatorLabel || a.sparkleFeedUrl)
     );
     if (identityApps.length > 0) {
       await Promise.all(identityApps.map(a =>
         pool.query(
-          'INSERT INTO app_identity (bundle_id, app_name, installomator_label, last_derived) VALUES ($1, $2, $3, now()) ON CONFLICT (bundle_id) DO UPDATE SET app_name = EXCLUDED.app_name, installomator_label = COALESCE(EXCLUDED.installomator_label, app_identity.installomator_label), last_derived = now() WHERE NOT app_identity.curated',
-          [a.bundleId, a.name, a.installomatorLabel]
+          'INSERT INTO app_identity (bundle_id, app_name, installomator_label, sparkle_feed_url, last_derived) VALUES ($1, $2, $3, $4, now()) ON CONFLICT (bundle_id) DO UPDATE SET app_name = EXCLUDED.app_name, installomator_label = COALESCE(EXCLUDED.installomator_label, app_identity.installomator_label), sparkle_feed_url = COALESCE(EXCLUDED.sparkle_feed_url, app_identity.sparkle_feed_url), last_derived = now() WHERE NOT app_identity.curated',
+          [a.bundleId, a.name, a.installomatorLabel, a.sparkleFeedUrl || null]
         ).catch(e => console.error('identity upsert failed for', a.bundleId, e.message))
       ));
     }
