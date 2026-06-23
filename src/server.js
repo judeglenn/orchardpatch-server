@@ -956,7 +956,7 @@ setInterval(async () => {
 setInterval(async () => {
   try {
     const result = await pool.query(
-      "SELECT id FROM pending_patches WHERE claimed_at IS NOT NULL AND claimed_at < now() - interval '30 minutes'"
+      "SELECT id FROM pending_patches WHERE claimed_at IS NOT NULL AND claimed_at::timestamptz < now() - interval '30 minutes'"
     );
     for (const row of result.rows) {
       try {

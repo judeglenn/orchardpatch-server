@@ -24,6 +24,7 @@ function buildCaskIndex(casks) {
     for (const artifact of (cask.artifacts || [])) {
       if (Array.isArray(artifact.app)) {
         for (const appFile of artifact.app) {
+          if (typeof appFile !== 'string') continue;
           const norm = normalizeStr(appFile.replace(/\.app$/i, ''));
           if (norm && !byAppName.has(norm)) byAppName.set(norm, cask);
         }
