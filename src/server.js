@@ -8,6 +8,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const pool = require("./db");
 const { bootstrapIdentity } = require("./lib/identity-bootstrap");
+const { startResolverCron } = require('./lib/resolver-cron');
 const versionSyncRouter = require("./routes/version-sync");
 const catalogSyncRouter = require("./routes/catalog-sync");
 
@@ -260,6 +261,7 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
         COALESCE(a.installomator_label, ac.label) AS label,
         CASE
           WHEN a.source = 'system' THEN 'na'
+          WHEN a.source = 'mas' THEN 'na'
           WHEN lv.latest_version IS NULL THEN 'unknown'
           WHEN a.version = lv.latest_version THEN 'current'
           ELSE 'outdated'
@@ -989,6 +991,7 @@ app.use((err, req, res, next) => {
 
 (async () => {
   try { await bootstrapIdentity(pool); } catch (e) { console.error('identity bootstrap failed:', e.message); }
+  startResolverCron(pool);
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[OrchardPatch Server] Listening on port ${PORT}`);
   });
