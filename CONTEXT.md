@@ -1,23 +1,24 @@
 # OrchardPatch -- Project Context
 
-Last updated: June 23, 2026 (CONSOLE DESIGN SYSTEM LOCKED this session: hunter-
-green primary #3d7a42 + mint #74cc7c on-dark, three-layer token system, light+
-dark with OS-follow toggle, flat green-tinted sidebar with top-edge shine,
-status-color semantics finalized, resolver IA designed on app-detail with
-progressive disclosure and a calm/restrained lagging treatment. Two surface
-references locked: Dashboard + App detail. Implementation pending: Chip drives
-Claude Code, branch-first, surface-by-surface. See the CONSOLE DESIGN SYSTEM
-section. Prior: Phase B shipped (Homebrew resolver, 30/36 matched,
-resolved_versions populated, patch_status MAS SQL fix, App Store status bar
-category, staleness sweep type cast fix). Phase C shipped (Sparkle + GitHub
-resolver infrastructure, multi-source candidate merge, trust-ranked winner,
-conflict flag, agent sending SUFeedURL, 2/3 Sparkle feeds resolved first run).
-Both machines on Phase C agent.)
+Last updated: June 25, 2026 (Console redesign nearly complete on branch
+design/liquid-glass, last commit this session: 0cfc0e0. Dashboard, App detail,
+and Device detail all converted and visually reviewed on Vercel preview.
+One pending task before merge: title case fixes on Topbar.tsx,
+apps/[id]/page.tsx, and devices/[id]/page.tsx -- see Next Session Priority
+Order for the exact prompt to send Chip.)
 
 ## What OrchardPatch is
 A Mac admin tool providing complete visibility into managed macOS fleet apps
 and patching via Installomator -- without touching your MDM. Tagline:
 "See Everything. Patch Anything. Break Nothing."
+
+Category: endpoint/patch management software (agent-based SaaS). Not pure
+SaaS -- requires a LaunchDaemon agent on each managed machine. Closest
+analogues: Kandji, Mosyle, Addigy. Security angle is real: OrchardPatch
+surfaces unknown apps, outdated apps with CVEs, and the lagging state (vendor
+shipped a patch, Installomator hasn't caught up -- the exact window attackers
+exploit). Security positioning is secondary to the Mac admin audience in UI
+copy; save it for waitlist/outreach framing where there's room to make the case.
 
 ## Parent Brand (Future)
 GraftKit -- the cross-platform umbrella brand when OrchardPatch expands beyond
@@ -34,7 +35,7 @@ graftkit.com registered but parked. Focus on OrchardPatch first.
 - Web app (frontend): github.com/judeglenn/orchardpatch
   - Local: ~/Projects/orchardpatch
   - Deployed: https://app.orchardpatch.com (primary)
-              https://orchardpatch.vercel.app (alias, still active)
+    https://orchardpatch.vercel.app (alias, still active)
 - Waitlist: github.com/judeglenn/orchardpatch-waitlist
   - Local: ~/Projects/orchardpatch-waitlist
   - Deployed: https://orchardpatch.com (marketing/waitlist page)
@@ -152,8 +153,7 @@ and writes them into process.env at startup.
   Only positional KEY=VALUE arguments override defaults. patcher.js passes
   NOTIFY=${mode} etc as positional args (correct). NOTE: DEBUG=1 as a
   positional arg is read correctly, but DEBUG=1 only skips the INSTALL step,
-  NOT the download. It does not give a download-free version check. See the
-  version-checker.js section for the actual version-check approach.
+  NOT the download. It does not give a download-free version check.
 - Agent secrets (server token, GITHUB_TOKEN) live in /etc/orchardpatch/config.json,
   root:wheel 600. Plist contains no secrets. applyConfigEnv() in scheduler.js
   reads config at startup and writes values into process.env so child processes
@@ -209,8 +209,8 @@ Agent (commit 9a2d75d and Phase 6 commit):
 Frontend (commits b8d6ee2, 401ade9):
 - /api/force-checkin proxy route.
 - Force check-in button on device detail page header panel. Three states:
-  idle, loading ("Checking in..."), success/error (auto-clears after 3s).
-  "Results appear within 60 seconds" note below button.
+  idle, loading ("Checking In..."), success/error (auto-clears after 3s).
+  "Results Appear Within 60 Seconds" note below button.
 - Undo affordance in Patch History: amber countdown button for queued silent
   jobs within 15s of created_at. tick useEffect only runs when an in-window
   job exists (zero performance cost at idle). undoSecondsLeft helper computed
@@ -388,7 +388,7 @@ published releases. Homebrew is human-curated and can lag.
 - Writes to resolved_versions with null-safe ON CONFLICT upsert
 - Cron fires 30s after server startup, then every 24h
 
-### Current state (June 23)
+### Current state (June 25)
 - resolved_versions: 30 rows, all from Homebrew initially; 2 rows have
   source updated to 'sparkle' (higher trust, took precedence)
 - Homebrew: 30/36 app_identity rows matched
@@ -406,133 +406,16 @@ Normalization: lowercase, alphanumeric only, all other chars stripped.
 Type guard in buildCaskIndex: typeof appFile !== 'string' -> continue
 (Homebrew artifact arrays can contain objects, not just strings).
 
-## CONSOLE DESIGN SYSTEM (LOCKED June 23, 2026)
+## /apps/status SQL update (June 25, 2026)
+GET /apps/status now includes:
+  LEFT JOIN resolved_versions rv ON rv.bundle_id = a.bundle_id
+  rv.latest_available added to SELECT.
+The /api/fleet/apps/[id] Next.js proxy route extracts latestAvailable from
+the first non-null latest_available value across all rows for the bundle_id,
+and returns it on the app object. This enables the lagging state in the
+version hero card.
 
-### Aesthetic
-Apple Liquid Glass meets Apple Business Manager. Clean, restrained, premium.
-Green is an accent, not dominant. Light mode = crisp ABM; dark mode = clean
-Liquid Glass on dark. Both ship.
-
-### Primary color (LOCKED)
-- Console accent (light surfaces): #3d7a42 hunter green. WCAG AA on white
-  (5.2:1) for text. Chosen over lime #7dd94a (fails on white, 1.7:1) and over
-  Pantone 19-5511 hunter #335749 (too dark/teal/passive). Deliberately brighter
-  than the official Pantone -- the console need not match the marketing logo.
-- On-dark / mint: #74cc7c. Sidebar wordmark "Patch", active nav indicator,
-  footer dot, and dark-mode accent (where #3d7a42 fails contrast on dark).
-- Marketing/waitlist keeps its own greens (#2d6e1f text, #4a7c2f buttons,
-  #7dd94a logo). Lime is gone from the console.
-
-### Token system (three layers -- the load-bearing decision)
-1. Primitives: ONLY place raw hex lives (green ramp, neutral ramp, night ramp,
-   status hues).
-2. Semantic: purpose-mapped tokens components reference (--accent, --accent-hover,
-   --accent-press, --accent-on-dark/--sidebar-accent, --text-primary/secondary/
-   tertiary, --surface-glass/solid/sunken, --topbar-glass, --sidebar-bg, --sheen,
-   --border-hairline/strong, --rim-top, --shadow-card/accent, --st-* status set,
-   radii). Light values at :root, dark values under [data-theme="dark"].
-3. Components reference SEMANTIC only. Never a raw hex in a component.
-- Payoff: a palette swap is one primitive line; a whole second theme is a set of
-  semantic values under one selector. Dark mode and the OS-follow toggle were
-  nearly free because of this. HARD constraint going forward.
-
-### Light + dark mode (LOCKED)
-- Both ship. Toggle in the topbar: segmented sun/moon glass control.
-- First load follows the OS (prefers-color-scheme) via an inline <head> script
-  (no flash), with <html data-theme="light"> as SSR default. Manual toggle sets
-  a userOverride flag and overrides for the session; a matchMedia 'change'
-  listener follows OS until the user overrides. No localStorage in this path.
-
-### Liquid Glass execution (what reads as the material in-browser)
-- Frosted translucency (backdrop-filter blur + saturate, with -webkit- prefix)
-  on chrome (sidebar, topbar), lighter on cards. Glass discipline: heavy blur on
-  chrome only (GPU cost on older fleet machines + text legibility).
-- Specular = a thin TOP-EDGE highlight only (inset 0 1px 0 + quick falloff via
-  inset shadow). A diagonal face shine reads as old Web 2.0 gloss and is
-  REJECTED.
-- A colored green rim-light (edge glow) was tried and REJECTED: reads
-  gaming/neon, off-thesis. Dark mode gets richness from translucency + specular
-  + depth, not color.
-- True optical refraction (lensing) deliberately NOT chased in-browser (shaky
-  cross-browser support, GPU cost). Rim-light + specular + saturation reads as
-  the material at UI scale and performs.
-- Card sheen via background-image gradient layered over the translucent
-  background-color (keeps backdrop-filter working).
-
-### Sidebar (LOCKED)
-- Flat green-tinted dark glass. Light rgba(31,58,40,0.90), dark
-  rgba(18,34,23,0.80). Backdrop-filter on.
-- Thin top-edge shine via inset box-shadows. NO radial glow band, NO diagonal
-  sweep.
-- Logo: TEXT ONLY wordmark "OrchardPatch", "Patch" in mint #74cc7c. Glyph
-  dropped.
-- Active nav: frosted pill + thin mint left bar (glowing). Sections: Inventory /
-  Enterprise / Configuration.
-
-### Status color semantics (LOCKED -- propagates to every surface)
-- current -> green (#3d7a42; vivid dot #3a9b46)
-- outdated/patchable -> AMBER (#d68a1e dot, #a8680c text). Moved FROM red; it is
-  an action item, not an error.
-- unknown -> GRAY (#8a9290). Moved FROM amber; we genuinely do not know.
-- system -> faint gray (#c4c9c7, de-emphasized)
-- App Store (MAS) -> blue (#2a86d8)
-- lagging -> RED (#d24b3a), restrained. The ONE red state, reserved for the
-  resolver's lagging state only.
-- Dark mode brightens each hue; tints become low-alpha over dark. All are tokens
-  (--st-*), never raw hex in components.
-
-### Resolver IA on app-detail (DESIGNED)
-- Version module: three numbers -- Installed, Patchable, Vendor latest.
-- PROGRESSIVE DISCLOSURE: render only as many numbers as carry information.
-  current=1 (+ check), patchable=2 (installed -> patchable, amber, + Patch),
-  lagging=3 (installed -> patchable -> vendor latest, vendor restrained red, +
-  factual gap line + patch-to-patchable), unknown=0 (muted "Version data
-  unavailable", stays visible not hidden).
-- Lagging treatment is CALM and PRECISE, not loud. Restrained red (dot, pill,
-  number, thin bar, factual sentence), NEVER a red banner. Wording is
-  Installomator-safe ("...for now", no blame). Rationale: Mac admins, alarm
-  fatigue, honesty-as-differentiator, protecting the Installomator relationship.
-- The killer case to feature in the demo: installed == patchable but vendor
-  ahead (the quiet false-negative the old single-number model hid).
-- Loudness earned only at: aggregate ("N apps lagging" on dashboard) and a
-  future hook to elevate genuinely-bad lagging (long-lived, or a security fix in
-  the version gap). Needs CVE/age data the resolver does not have yet.
-- App-detail layout: identity header (avatar, name, bundle id mono, label chip,
-  source badge "via Installomator" = extensible SourceBadge, device count) +
-  Bushel "Patch all outdated" top-right + overflow; version hero; fleet
-  installations table (per-device state + Fruit per-device patch button,
-  CONDITIONAL: Patch when installed<patchable, "On newest patchable" when
-  installed==patchable & lagging, hidden for MAS showing "App Store"); app patch
-  history (flat list, full datetime).
-- Installed at app level is a fleet AGGREGATE: single number when uniform, range
-  (e.g. "131.0-132.0") when machines diverge.
-
-### Reference files (visual source of truth -- drop in repo design-reference/)
-- orchardpatch-console-master.html -- Dashboard, LOCKED. Token block at top is
-  canonical, lift close to verbatim into globals.css + tailwind.config.
-- orchardpatch-app-detail.html -- App detail, LOCKED.
-- version-module-states.html -- the four resolver states.
-- orchardpatch-claude-code-build-spec.md -- the implementation spec.
-- (Exploration, NOT spec: sidebar-treatment-comparison, sidebar-bplus-rimlight,
-  sidebar-glossfree.)
-
-### Implementation plan (console redesign)
-- Tool: Chip DRIVES CLAUDE CODE. Chip orchestrates + git; Claude Code does the
-  multi-file editing and runs npm run build itself. Keep the build loop INSIDE
-  Claude Code (do not relay build errors back through Chip). Frontend ships via
-  Vercel on git push, so on-machine access buys nothing here -- Claude Code's
-  self-running build loop kills the paste round-trip. Keep Chip's on-machine edge
-  for the agent/server repos.
-- Branch off main. NEVER redesign on main. Vercel preview-per-branch; review each
-  surface on its preview URL before merge.
-- Order: (1) token layer only (globals.css + tailwind.config + head theme script
-  + toggle), build + preview. (2) shell (sidebar + topbar). (3) dashboard. (4)
-  app-detail. Each its own commit + preview, clean npm run build before merge.
-- Hazard: template-literal mangling is a Python-generated-edit problem; Claude
-  Code edits directly so it does not apply. Ensure work goes through direct file
-  editing, not a Python-string path.
-
-## Roadmap sequencing (DECIDED June 22, updated June 23)
+## Roadmap sequencing (DECIDED June 22, updated June 25)
 Decision: RESOLVER-FIRST. Outreach is timed to the resolver (the
 differentiator), not merely to the console.
 
@@ -540,26 +423,10 @@ Decided sequence:
 1. Resolver Phase A -- SHIPPED June 22.
 2. Resolver Phase B (Homebrew source, real data) -- SHIPPED June 23.
 3. Resolver Phase C (Sparkle + GitHub + candidate recording) -- SHIPPED June 23.
-4. Primary-green call -- DONE June 23 (#3d7a42 accent + #74cc7c mint on-dark).
-   Bounded decision, not a full brand session.
-5. Console design system -- DONE June 23 (Dashboard + App detail references
-   locked, fully tokenized, light+dark with OS-follow, status semantics,
-   resolver IA). See the CONSOLE DESIGN SYSTEM section.
-6. Console redesign IMPLEMENTATION -- NEXT. Chip drives Claude Code, branch-first,
-   token -> shell -> dashboard -> app-detail. Absorbs resolver Phase D info
-   architecture. Outreach gate.
-7. Demo video + polished repo.
-8. Outreach (MacAdmins Slack + contribution-first maintainer contact).
-
-Key constraints:
-- Console redesign MUST be tokenized. Tokens dissolve the lime-vs-hunter
-  dilemma: a tokenized color is a variable, not throwaway work. (DONE -- the
-  reference files are fully tokenized.)
-- The console redesign hosts the resolver IA as designed-but-empty slots
-  (dashboard patchable/lagging split; app-detail three-number display that
-  collapses to one when there's no available data). Possible WITHOUT rework
-  only because the resolver was designed first. (App-detail IA now DESIGNED.)
-- MAS detection was a DEMO GATE -- now resolved (Phase A shipped).
+4. Console redesign, all surfaces, fully tokenized -- NEARLY COMPLETE (June 25).
+   One title case commit remaining before merge to main.
+5. Demo video + polished repo.
+6. Outreach (MacAdmins Slack + contribution-first maintainer contact).
 
 ## System app classification philosophy
 "System" = any app signed by Apple (com.apple.* bundle ID) or resident
@@ -586,7 +453,7 @@ Known MAS installs on Chip's machine (device-C02D52QTML85): none detected.
 Slack on Chip's machine is a direct download (not MAS) -- has Patch button.
 DaVinci Resolve is MAS on Jude's machine; may be direct download on others.
 App Store status bar pill: added Phase B. App Inventory shows 8 App Store
-apps (pill shows 8, filtered list shows 7 -- known discrepancy, see tech debt).
+apps on current fleet.
 Remaining gap: Branch/Bushel/Orchard modals still count MAS apps as patchable
 targets. The Fruit button hide is done; the multi-device patch exclusion is
 backlogged. MAS apps hitting Branch/Bushel will return exit 23 (handled in
@@ -622,12 +489,50 @@ Unknown means genuinely unpatchable via Installomator, not a bug.
   Phase 6 fork 2 decision.
 
 ## UI homes for each tier
-- Fruit: app detail page fleet installations table (per-device Patch button)
-- Branch: device detail page, "Patch This Device" button
+- Fruit: app detail page fleet installations table (per-device Patch button).
+  Also device detail page per-app Patch button.
+- Branch: device detail page, "Patch All Outdated" button (renamed June 25
+  from "Patch This Device")
 - Bushel: app detail page, "Patch All Outdated" button
 - Orchard: Fleet Dashboard (/dashboard), "Patch All Outdated" card
 - Catalog: /catalog page (SHIPPED June 13)
 - Cultivation: /orchard page, Coming Soon
+
+## Patch modal copy standard (established June 25, 2026)
+All four modals have a quiet tier name footer below the action buttons.
+Style: fontSize 11, var(--text-tertiary), textAlign center, marginTop 8.
+Teaches vocabulary without forcing it.
+
+- Fruit: "Patch by the Fruit · Single App, Single Device"
+- Branch: "Patch by the Branch · All Outdated Apps, Single Device"
+- Bushel: "Patch by the Bushel · Single App, All Devices"
+- Orchard: "Patch by the Orchard · All Outdated Apps, Entire Fleet"
+
+Modal titles (June 25 update):
+- Fruit (apps/[id]): "Patch {app.name}" (dynamic app name)
+- Fruit (devices/[id]): "Patch {patchTarget.appName}" (dynamic)
+- Branch: "Patch Device"
+- Bushel: existing (app name in header)
+- Orchard: existing
+
+## Copy standards (established June 25, 2026)
+- No em dashes anywhere
+- No emoji in UI. Use colored dot indicators: 8px filled circle, border-radius
+  50%, inline style, CSS variable token for backgroundColor.
+  Token mapping: outdated=var(--st-outdated), current=var(--st-current),
+  unknown=var(--st-unknown), system=var(--st-system), store=var(--st-store),
+  lagging=var(--st-lagging).
+- Title case on all user-facing strings. Rules: capitalize first and last word
+  always; capitalize major words (nouns, verbs, adjectives, adverbs); lowercase
+  articles (a, an, the), short prepositions under 5 letters (on, at, in, of,
+  to, by, up), coordinating conjunctions (and, but, or, nor, for, so, yet);
+  always capitalize first word after a colon.
+- No possessives in section headers and labels. Prefer plain declarative
+  language. "Apps Detected" over "Your Installed Apps".
+- "Apps Detected" preferred over "Installed Apps" -- OrchardPatch discovers
+  what's actually on the machine.
+- App Inventory subtitle: "Fleet-Wide Software Detection Across All Managed
+  Devices"
 
 ## Frontend routing structure
 - / -- redirects to /dashboard
@@ -636,7 +541,8 @@ Unknown means genuinely unpatchable via Installomator, not a bug.
 - /apps/[id] -- App detail page
 - /catalog -- Software Catalog (SHIPPED June 13)
 - /devices -- Device list
-- /devices/[id] -- Device detail page (Force Check-in button added Phase 6)
+- /devices/[id] -- Device detail page (Force Check-In button added Phase 6)
+- /fleet/devices/[id] -- redirects to /devices/[id]
 - /patch-history (also /patches in deployed frontend) -- Patch History
 - /orchard -- Cultivation Coming Soon page
 
@@ -707,7 +613,8 @@ not hardcoded in logic. Future sources slot in naturally.
 - Start Claude.ai sessions by opening OrchardPatch project (CONTEXT.md loaded)
 - End every session: update CONTEXT.md, paste to Chip, commit. Also produce
   session handoff file for next session. PREFERENCE: full CONTEXT.md rewrites
-  at session end, not insertion blocks.
+  at session end, not insertion blocks. Preserve ALL existing detail -- do not
+  summarize or compress prior sessions' content.
 - Standing rule: always fix bugs at root cause. Never suggest workarounds.
   If a workaround is needed to unblock testing, flag it explicitly as tech
   debt before moving on.
@@ -718,6 +625,15 @@ not hardcoded in logic. Future sources slot in naturally.
 - Standing rule: avoid follow-mode / non-terminating commands (tail -f,
   --follow) in Chip prompts -- they block Chip's tool-call loop until
   timeout. Use bounded forms (tail -n 50, fixed-duration checks).
+- CRITICAL (June 24): Never use Tailwind utility classes for layout, spacing,
+  or color in the orchardpatch frontend. Tailwind v4 purges utility classes
+  that appear only in newly-added or heavily-modified files and are not
+  referenced elsewhere in the bundle. All structural styles MUST use inline
+  style props (React.CSSProperties). Inline styles cannot be purged.
+  Tailwind is only reliable for: animate-spin, icon sizing (h-4 w-4), and
+  classes that already appear at high volume across pre-existing files.
+  This applies to shadcn components too if they are visibly broken in
+  production (dropdown-menu.tsx, select.tsx, table.tsx all patched June 25).
 - Chip prompts go in code blocks so Jude can copy them directly.
 - For large output from Chip: ask Chip to write to a file on the Desktop
   so Jude can copy from a text editor (Telegram blocks large clipboard copies).
@@ -725,18 +641,9 @@ not hardcoded in logic. Future sources slot in naturally.
   debugging topology/design issues, cross-repo reasoning, spec writing.
 - Chip is better for: codebase-aware implementation, exact file locations,
   running commands, hot-deploying to installed agent.
-- Chip CAN DRIVE CLAUDE CODE. For large multi-file frontend work (e.g. the
-  console redesign), have Chip drive Claude Code: Chip orchestrates + git,
-  Claude Code does the editing and runs npm run build itself. Keep the build
-  loop INSIDE Claude Code (do not relay build errors back through Chip). Frontend
-  ships via Vercel on git push, so on-machine access is irrelevant for it;
-  reserve Chip's on-machine edge for the agent/server repos. Claude Code edits
-  files directly, so the template-literal / Python-heredoc hazards above do NOT
-  apply to it -- just keep the work on a direct file-editing path.
 - Use Opus for: complex ambiguous architecture decisions, multi-tenancy
   design, Cultivation policy engine, version-resolver redesign, YC
-  application writing, decisions with multi-week downstream consequences, AND
-  substantial UI/design build work (the console design was done in Opus).
+  application writing, decisions with multi-week downstream consequences.
 
 ## Three-channel chat architecture (OrchardPatch project)
 1. "Architectural Deep Dives" -- Opus. Cross-repo architecture, multi-
@@ -810,7 +717,7 @@ not hardcoded in logic. Future sources slot in naturally.
   (installomatorLabel OR sparkleFeedUrl). Previously required installomatorLabel.
 - resolved_versions: bundle_id (PK), latest_available, source, source_url,
   candidates (JSONB), conflict, resolved_at, error -- NEW Phase A (schema).
-  Populated from Phase B onward. 30 rows as of June 23. source values in use:
+  Populated from Phase B onward. 30 rows as of June 25. source values in use:
   'homebrew', 'sparkle'. candidates JSONB contains all source results for the
   bundle_id. conflict=true when sources disagree on major or minor version.
   Two tables, two pipelines: latest_versions (patchable) stays unchanged;
@@ -853,7 +760,8 @@ not hardcoded in logic. Future sources slot in naturally.
 - GET /apps/status?device_id= -- patch status per app with cache_age_seconds.
   Returns source field as of Phase A. patch_status values: 'outdated',
   'current', 'unknown', 'na'. Phase B: added WHEN a.source='mas' THEN 'na'
-  to CASE. Both MAS and system now correctly return 'na'.
+  to CASE. June 25: LEFT JOIN resolved_versions added; latest_available now
+  returned on every row.
 - GET /stats -- fleet stats
 - POST /patch -- queue a Fruit patch job. Writes both tables atomically.
   NOTE (Phase 6): silent mode withholds pending_patches for 15s undo window.
@@ -891,7 +799,8 @@ Return 503 if env var missing. 14 routes total as of Phase 6.
 - /api/apps/status
 - /api/catalog
 - /api/fleet/status
-- /api/fleet/apps/[id]
+- /api/fleet/apps/[id] -- returns latestAvailable (added June 25, extracted
+  from latest_available via LEFT JOIN resolved_versions on the server)
 - /api/fleet/devices/[id]
 - /api/force-checkin -- NEW Phase 6. Forwards to POST /api/force-checkin.
 NOTE (Phase 6): mode-based deferred-enqueue policy (silent = 15s window) lives
@@ -899,434 +808,263 @@ in the server POST /patch handler. The proxy passes mode through as-is.
 
 ## Feature status
 
-### Shipped (Phase C -- June 23, 2026)
-- **Sparkle resolver.** src/lib/resolvers/sparkle.js. Queries app_identity for
-  sparkle_feed_url rows, fetches XML, parses via fast-xml-parser, extracts
-  sparkle:version. Returns Map. 2/3 feeds resolved on first run.
-- **GitHub resolver.** src/lib/resolvers/github.js. Queries app_identity for
-  github_repo rows, calls Releases API, strips 'v' prefix. Returns Map.
-  Currently empty (no github_repo entries). Infrastructure ready.
-- **Multi-source coordinator.** resolver-cron.js rewritten. Runs all three
-  resolvers in parallel, merges candidates per bundle_id, picks winner by
-  trust order (sparkle > github > homebrew), writes resolved_versions once per
-  bundle_id with conflict flag.
-- **Candidate recording.** resolved_versions.candidates JSONB now contains all
-  source results for each app. Phase B only had single-source Homebrew entries.
-  Phase C correctly records multi-source candidates.
-- **Agent SUFeedURL.** inventory.js reads SUFeedURL from Info.plist, sends as
-  sparkleFeedUrl in check-in payload. Deployed to both machines June 23.
-- **Checkin guard broadened.** POST /checkin now writes app_identity row if
-  bundle_id AND (installomatorLabel OR sparkleFeedUrl). Previously required
-  installomatorLabel, silently skipping Sparkle-only apps.
-- **sparkle_feed_url in app_identity upsert.** Added to INSERT columns and
-  ON CONFLICT DO UPDATE clause. Never overwrites existing value with null.
+### Console redesign -- IN PROGRESS (branch design/liquid-glass, June 25)
+Branch: design/liquid-glass. Last commit this session: 0cfc0e0.
+One pending task before merge -- see PENDING section below.
 
-### Shipped (Phase B -- June 23, 2026)
-- **Homebrew resolver.** src/lib/resolvers/homebrew.js. Bulk fetch cask.json
-  (~7725 casks), multi-index match against app_identity, writes homebrew_cask
-  to app_identity, returns Map. 30/36 app_identity rows matched.
-- **resolved_versions populated.** 30 rows. Daily cron (30s startup delay).
-- **patch_status MAS SQL fix.** WHEN a.source='mas' THEN 'na' added to CASE
-  in GET /apps/status. API response now accurate for MAS apps.
-- **App Store status bar category.** HomePageInner.tsx synthesizes
-  patch_status='mas' client-side from row.source === 'mas'. Fifth pill in
-  status bar: after System. PatchStatusBadge.tsx updated with 'mas' type and
-  STATUS_CONFIG entry. Shows 8 App Store apps on current fleet.
-- **Staleness sweep type cast fix.** claimed_at::timestamptz cast added to
-  30-min staleness sweep query. Was causing "operator does not exist: text <
-  timestamp with time zone" error every 5 minutes.
+**Hard constraints (non-negotiable for all new work):**
+- Zero hardcoded hex in components. CSS variable tokens only.
+- All layout, spacing, and color via inline style props (React.CSSProperties).
+  No Tailwind utility classes for these. Inline styles cannot be purged.
+- Both light and dark mode work on every surface.
+- backdrop-filter needs -webkit- prefix for Safari. Always include both.
+- No emoji in UI. Use 8px colored dot indicators with CSS variable tokens.
+- Title case on all user-facing strings.
 
-### Shipped (Phase A -- June 22, 2026)
-- **app_identity table.** bundle_id PK, installomator_label, homebrew_cask,
-  github_repo, sparkle_feed_url, adam_id, curated, last_derived. Schema in
-  src/db.js. (orchardpatch-server commit e301cbe)
-- **resolved_versions table.** Schema in src/db.js. (orchardpatch-server
-  commit e301cbe)
-- **download_url on app_catalog.** Extracted from Installomator fragment
-  downloadURL field during catalog-sync. Regex captures static URLs only.
-  (orchardpatch-server commit e301cbe)
-- **Identity bootstrap.** src/lib/identity-bootstrap.js. Runs on server
-  startup, after catalog-sync, and per check-in. (orchardpatch-server commit
-  e358bfe)
-- **source field in /apps/status response.** (orchardpatch-server commit
-  0108214)
-- **MAS detection in agent.** inventory.js checks Contents/_MASReceipt.
-  10 MAS apps on Jude's machine, 0 on Chip's. (orchardpatch-agent commit)
-- **Patch button hidden for MAS apps.** App detail page. (orchardpatch commit
-  f75757d)
+**Token layer (shipped June 24):**
+- globals.css: verbatim :root and [data-theme="dark"] blocks from
+  orchardpatch-console-master.html. All semantic tokens defined.
+- New tokens added June 25: --surface-raised (#ffffff light /
+  rgba(255,255,255,0.07) dark), --border-accent (rgba(61,122,66,0.35) light /
+  rgba(116,204,124,0.30) dark). --surface-solid already existed.
+- Tailwind @theme inline {} block maps tokens.
+- layout.tsx: inline no-flash theme script, data-theme="light" SSR default,
+  ThemeToggle in sidebar footer only.
 
-### Shipped (June 22, 2026 -- prior session)
-- **Phase 6 fully verified on both machines.**
-- **GITHUB_TOKEN secured.** Moved from plist to config.json.
-- **Patch History UI overhaul.** Flat list, formatDateTime, TL;DR summary,
-  exitCode field, human-readable exit code mappings.
+**Sidebar icons (updated June 25):**
+All hand-rolled inline SVGs. viewBox="0 0 24 24", strokeWidth: 1.7, round caps
+and joins, width/height 18.
+- DashboardIcon: layout rect (wide top bar + two bottom panels). Distinct from
+  AppsIcon 2x2 grid.
+- SettingsIcon: horizontal sliders (three lines with circle handles).
+- All other icons unchanged: Globe=Devices, Clock=History, Plant=Cultivation,
+  BarChart=Reports, Bell=Alerts, Grid=Apps, Box=Catalog.
 
-### Shipped (June 23, 2026 -- Phase 6 implementation)
-- **Phase 6: Force check-in.** Fast loop (60s) + slow loop (15min) agent
-  split. pending_commands table + endpoints. Force check-in button on device
-  detail page. Undo affordance (amber countdown) for silent queued jobs in
-  Patch History. 30-min staleness sweep + terminate_stuck_job. 24h expiry
-  orphan bug fixed. Cancel FOR UPDATE on pending_patches. Deferred enqueue
-  for silent patches.
+**Status color semantics (applied across all surfaces):**
+- Outdated/patchable: amber (var(--st-outdated)). Never red.
+- Lagging (vendor ahead of Installomator): red (var(--st-lagging)). Reserved
+  for this state only.
+- Unknown: gray (var(--st-unknown)).
+- Current: green (var(--st-current)).
+- System: faint gray (var(--st-system)).
+- App Store: blue (var(--st-store)).
+- Dot indicators: 8px filled circle, border-radius 50%, backgroundColor token.
 
-### Shipped (June 21-22, 2026 -- waitlist page)
-- **Waitlist page overhaul.** Full visual redesign, copy overhaul, fleet size
-  capture field, deduplication, privacy popover, contact copy-on-click.
+**Shadcn component patches (justified exceptions -- visibly broken in prod):**
+- src/components/ui/dropdown-menu.tsx: zIndex 9999 on Positioner inline;
+  --surface-raised (opaque) background on Popup; callerStyle destructured from
+  props and merged after base styles so caller cannot overwrite base background;
+  item padding inline (6px 8px); animation-only Tailwind kept in className.
+- src/components/ui/select.tsx: same pattern applied.
+- src/components/ui/table.tsx: TableHead and TableCell inline padding 10px 12px
+  to replace purged Tailwind p-2/px-2. Style set before {...props} so callers
+  win on conflict (correct precedence for a base component).
 
-### Shipped (June 16)
-- **Phase 4: Installomator self-update via catalog.**
-- **Phase 5: Token lockdown.** All fleet calls through proxy layer.
-- **Catalog pagination.**
-- **version-checker.js rewrite.** Async spawn, early-kill, 12s backstop.
-- **Null-safe ingest (commit d96ea73).**
-- **app.orchardpatch.com custom domain.**
+**Mechanical conversions (shipped June 24):**
+All files below converted from hardcoded hex + Tailwind layout classes to
+CSS variable tokens + inline style props:
+- src/app/patches/page.tsx
+- src/app/catalog/page.tsx
+- src/app/devices/page.tsx
+- src/app/fleet/page.tsx
+- src/app/reports/page.tsx
+- src/app/settings/page.tsx + organization, enrollment, labels, jamf sub-pages
+- src/app/alerts/page.tsx
+- src/app/orchard/page.tsx
+- src/app/login/page.tsx
+- src/app/integrations/page.tsx (fully unconverted -- hardcoded hex removed)
+- src/components/HomePageInner.tsx
+- src/components/AppCard.tsx
+- src/components/PatchStatusBadge.tsx
+- src/components/SearchBar.tsx (crammed search text root cause fixed)
+- src/components/AgentBanner.tsx
+- src/components/VersionChart.tsx
+- src/components/VersionChartWrapper.tsx
+- src/components/Sidebar.tsx (ThemeToggle in footer)
 
-### Shipped (June 13)
-- **Phase 1-3: Job id-threading fix, agent deploy, Software Catalog page.**
-- **Token rotation + hardcoded fallback removal.**
+**Dashboard (/dashboard) -- COMPLETE (June 25):**
+- 5 metric cards: clickable, link to /apps?status= with filter pre-applied
+  (outdated, current, unknown, system, mas)
+- Top outdated app rows: clickable, link to /apps/[bundle-id-slug].
+  bundle_id surfaced through AppStatus interface and threaded through
+  outdatedByLabel grouping.
+- HomePageInner: reads ?status= on mount via useSearchParams, initializes
+  patchStatusFilter from URL. Suspense provided by existing dynamic() + ssr:false
+  wrapper on apps/page.tsx.
+- Fleet health donut: five segments (outdated, current, unknown, system,
+  App Store/blue). Total includes all five for complete fleet composition view.
+- Fleet health legend: five rows, all clickable via LegendRow component with
+  hover state. App Store row links to /apps?status=mas.
+- statusCounts: deduplicated by bundle_id before computing. Worst-case-wins
+  (outdated > unknown > current > na). MAS/System split correctly: system =
+  patch_status='na' AND source!='mas'; store = source='mas'.
+- Top outdated apps: scroll container maxHeight 240. Card header stays fixed.
+- Sync now button: wired to silent stats refresh via loadData({silent:true}).
+  Button hides while sync is in flight. No skeleton flash.
+- ThemeToggle: sidebar footer only. Removed from topbar in all three variants.
+- overflow: hidden removed from cardStyle.
+- Last outdated app row: no borderBottom.
+- Pinned slots: hover state transitions border + text to var(--accent) via
+  PinSlot component with useState.
 
-### Previously shipped
-- Dashboard, App Inventory, App detail, Device list/detail, Patch History
-- Branch, Bushel, Orchard patch modals. Cancel buttons. Auth wall.
+**App Inventory (/apps) -- COMPLETE (June 25):**
+- Status bar: dot indicators, no emoji. Five categories.
+- Title: "App Inventory"
+- Subtitle: "Fleet-Wide Software Detection Across All Managed Devices"
+- Category dropdown: --surface-raised background (opaque), zIndex 9999,
+  callerStyle merge pattern, item padding 6px 8px inline.
+- Sort dropdown: same fix via select.tsx.
+- Filter trigger buttons: explicit padding 0 12px, gap 6, whiteSpace nowrap,
+  height 36 on all three (Category, Name A-Z, Outdated).
 
-### Designed and locked (June 23, implementation pending)
-- Console design system: hunter-green primary #3d7a42 + mint #74cc7c, three-layer
-  token system, light+dark with OS-follow toggle, flat green-tinted sidebar with
-  top-edge shine, status-color semantics, Liquid Glass execution rules. See the
-  CONSOLE DESIGN SYSTEM section.
-- Dashboard reference (orchardpatch-console-master.html) -- LOCKED.
-- App detail reference (orchardpatch-app-detail.html) with the resolver version
-  module (progressive disclosure, calm/restrained lagging) -- LOCKED.
-- Apps inventory list + device-detail still need design passes (same system).
+**App detail (/apps/[id]) -- COMPLETE (June 25):**
+- latest_available surfaced via server LEFT JOIN on resolved_versions.
+  Returned as latestAvailable on app object from /api/fleet/apps/[id] proxy.
+- normalizeVersion helper: strips comma-suffix ("12.8,282010" -> "12.8") AND
+  parenthetical build numbers ("7.1.0 (83064)" -> "7.1.0"). Used everywhere
+  versions are displayed. Never mutates stored values.
+- versionGt helper: segment-by-segment numeric comparison. Used for lagging
+  condition: available > patchable (directional). When patchable > available
+  (stale Homebrew data), classifies as patchable, not lagging.
+  Firefox case: Installomator at 152.0.3, Homebrew at 152.0.2 -- correctly
+  shows patchable after the directional fix.
+- Resolver state derivation (in order): unknown (no patchable, no available) /
+  patchable (installed < patchable) / lagging (versionGt(available, patchable)
+  AND installed >= patchable) / current.
+- Fleet aggregate installed version: single if all devices uniform, range
+  ("131.0-132.0") if diverged. Computed from per-device rows.
+- Version hero card, four states with progressive disclosure:
+  - current: large number + green check circle (26x26, st-current-tint bg) +
+    "Installed everywhere, matches the latest the vendor has shipped." prose
+  - patchable: two columns (INSTALLED -> PATCHABLE), amber patchable number,
+    "across N devices" sub-label if diverged, inline Patch CTA button with
+    "Up to date with the vendor" note. Smart modal routing: Bushel if multi-
+    device, Fruit if single.
+  - lagging: three columns (INSTALLED -> PATCHABLE -> VENDOR LATEST). Installed
+    in --text-primary, patchable in --st-outdated (amber), vendor latest in
+    --st-lagging (red). Explanatory line with 3px left accent bar in
+    --st-lagging: "Installomator can install up to X for now. Y is available
+    from the vendor. This gap closes automatically once Installomator adds the
+    newer release." Calm. No red banners. No blame. Installomator-safe wording.
+    Inline Patch CTA with "Closes the patchable gap" note.
+  - unknown: 40x40 gray icon box (--surface-raised bg, --text-tertiary color,
+    question mark SVG) + "Version Data Unavailable" + prose.
+- Fleet installations card: per-device rows, conditional action column:
+  - installed < patchable: "Patch to X" button (Fruit)
+  - installed >= patchable but lagging: "On Newest Patchable" muted text
+  - source='mas': "App Store" muted text, no patch action
+  - Last row: no borderBottom.
+- Patch history card: last row no borderBottom.
+- Fruit modal title: "Patch {app.name}" (dynamic).
+- Fruit modal footer: "Patch by the Fruit · Single App, Single Device"
+- Bushel modal footer: "Patch by the Bushel · Single App, All Devices"
+- cardStyle: overflow hidden removed.
 
-### Not yet built (priority order)
-1. CONSOLE REDESIGN IMPLEMENTATION: token layer -> shell -> dashboard ->
-   app-detail. Chip drives Claude Code. Branch-first, Vercel preview-per-surface,
-   clean npm run build before each merge. Fully tokenized, light+dark, OS-follow.
-   Absorbs resolver Phase D info architecture. Outreach gate. See
-   orchardpatch-claude-code-build-spec.md. NEXT.
-2. Apps inventory list + device-detail design passes (same system).
-3. Demo video + polished repo.
-4. Outreach (MacAdmins Slack + maintainer).
--- Then the previously-listed backlog, still valid, lower priority --
-5. Phase 7: Force reinstall in catalog modal (UNINSTALL=1).
-6. Installomator version + Update button on device detail.
-7. Agent update mechanism -- pkg build pipeline. PRE-LAUNCH GATE. Opus Deep
-   Dive (pkg pipeline vs server-pushed self-update).
-8. Agent token rotation product feature.
-9. method='fruit' hardcode cleanup in POST /patch-jobs.
-10. Bushel modal pre-count cosmetic fix.
-11. MAS app exclusion from Branch/Bushel/Orchard queues. Currently MAS apps
-    can be queued and return exit 23. TL;DR surfaces correct message. Fix
-    properly: filter source='mas' apps out of multi-device patch queries.
-12. "Clear by status" bulk action in Patch History.
-13. Pinned Apps on Dashboard (needs preferences table).
-14. Automated catalog-sync schedule.
-15. Cultivation / policy-based auto-remediation.
-16. Multi-tenancy. PREREQUISITE for mutating pending_commands.
-17. SSO / proper auth. PREREQUISITE for mutating pending_commands.
-18. Graph reports, CLI/Homebrew tap, mas CLI integration.
-NOTE: Resolver Phase E (move latest_patchable resolution server-side, retire
-the per-agent early-kill scrape) is deferred and explicitly OUT OF SCOPE for
-the resolver redesign. Do not let it expand the resolver effort.
+**Device detail (/devices/[id]) -- COMPLETE (June 25):**
+- Full token conversion: zero hardcoded hex remaining.
+- cardStyle matches other surfaces (surface-glass, sheen, backdrop-filter,
+  border-hairline, r-xl, shadow-card, padding 22/24).
+- overflow: hidden removed from card and table wrapper.
+- Table wrapper: padding 0 12px so content breathes from card edge.
+- Section header: "APPS DETECTED"
+- Subtitle: "{n} installed · {n} outdated"
+- Force Check-In button: three states via inline state -- idle (--text-primary),
+  success (--st-current), error (--st-lagging). "Results Appear Within 60
+  Seconds" note. Auto-clears after 3s.
+- Patch All Outdated button: right-aligned above PATCH column. Uses
+  --accent-grad, --shadow-accent, white text, --r-md.
+- Branch modal title: "Patch Device"
+- Branch modal footer: "Patch by the Branch · All Outdated Apps, Single Device"
+- Orchard modal footer: "Patch by the Orchard · All Outdated Apps, Entire Fleet"
+- Emoji removed throughout; dot indicators used.
+- color-mix() used for semantic status tints (outdated badge, error state bg) --
+  correct since these need semantic color. Table row alternation uses
+  --surface-raised instead of color-mix (structural, not semantic).
+- Title case audit applied (June 25). See PENDING for remaining files.
 
-## Open items / tech debt
-- **AGENT UPDATE MECHANISM -- PRE-LAUNCH GATE.** No pkg build pipeline exists
-  for agent updates. Current process is manual file copy + bootout/bootstrap.
-  Required before real users are onboarded. Decision on approach (signed pkg
-  vs server-pushed self-update via pending_commands) belongs in Architectural
-  Deep Dives.
-- **Comma-format Homebrew versions.** resolved_versions.latest_available can
-  contain "12.8,282010" (Homebrew's version,build format -- e.g. Docker, Telegram,
-  coconutBattery). Stored value is correct. Normalize to the part before the
-  comma at display time in the console redesign. Do not mangle the stored value.
-- **Dashboard vs App Inventory count mismatch.** Dashboard counts per device-
-  app row (apps table). App Inventory deduplicates by bundle_id. Same fleet,
-  different numbers (Dashboard: 18 outdated, 122 System; App Inventory: 14
-  outdated, 64 System). Reconcile in console redesign.
-- **App Store count vs filter discrepancy.** Status bar pill shows 8 App Store
-  apps. Filtered list shows 7. Canva, Slack, and Telegram are confirmed MAS on
-  Jude's machine but missing from the filtered view despite appearing in the
-  count. Deferred to console redesign.
-- **Unidentified Sparkle feed failure.** 3 apps sent a sparkleFeedUrl from
-  agents; 2 parsed successfully. The 1 failure is silently caught and logged
-  as an error per app. Identify which app's feed fails and why. Check
-  agent.error.log or add per-app error logging to sparkle.js.
-- **downloadURL regex partial captures.** The regex stops at '$', so a URL
-  like "https://github.com/.../v${appNewVersion}/file.dmg" captures a partial
-  prefix rather than null. Phase C validates captured URLs before using them,
-  so partial URLs fail gracefully. Tighten the regex when download_url values
-  start being consumed.
-- **Identity bootstrap startup race.** Migration (CREATE TABLE) runs as a
-  side effect of require('./db') and is not awaited in server.js. bootstrapIdentity
-  could theoretically run before CREATE TABLE completes on a cold DB. In
-  practice the try/catch catches it and the next trigger succeeds. Fix properly
-  when migration is refactored to be explicitly awaited.
-- reportPatchJob() / waitForJob() in the scheduler: unreachable dead code.
-  Clean up in a future agent deploy.
-- KNOWN RACE in deferred enqueue: ~1ms window between SELECT status and INSERT
-  in setTimeout guard. Documented in code. Fix before multi-tenancy: wrap in
-  FOR UPDATE transaction.
-- postinstall script installs Installomator to /usr/local/bin/ -- conflicts
-  with pkg convention. Fix or remove.
-- method='fruit' hardcode in POST /patch-jobs INSERT VALUES. Safe but dirty.
-- DB indexes: none on fleet queries or pending_commands. Fine at 2 devices.
-- agent_url column: unused, reserved for future server-initiated flows.
-- Telegram label mismatch: Jude's machine has MAS Telegram (source='mas',
-  Patch button hidden -- resolved for that device). Chip's machine has Telegram
-  Desktop (direct download). The label mismatch ("Telegram (Mac App Store)" vs
-  "Telegram Desktop") remains an issue for Chip's machine. Deferred to resolver.
-- Last-known-good version held forever: staleness policy deferred to resolver.
-- Console UI redesign: SEQUENCING DECIDED June 22 (resolver-first). Execution
-  follows primary green call. Hard constraint: fully tokenized (zero hardcoded
-  hex) so the deferred hunter-green swap is a token change.
-- GITHUB_TOKEN scoped to all public repos -- tighten to Installomator repo
-  at next rotation (renewed May 12, 2026).
+**PENDING before merge (next session first task):**
+Chip ran out of credits before executing this commit. Send verbatim:
 
-## Known label-matching issues
-- coconutBattery: label scrapes coconut-flavour.com, gets HTML back.
-  Upstream Installomator bug. Save for maintainer outreach opener.
-  NOTE: coconutBattery now resolves via Homebrew (latest_available = 4.3.3).
-  The patchable pipeline is still broken; the available pipeline works.
-- Telegram: MAS on Jude's machine (handled). Direct download on Chip's
-  machine -- label mismatch between "Telegram (Mac App Store)" and
-  "Telegram Desktop" still unresolved for device-C02D52QTML85.
-- DaVinci Resolve: MAS on Jude's machine. May be direct download elsewhere --
-  if so, verify label and add override. Different distributions of same app.
-- firefoxpkg: verify patches standard Firefox not ESR.
-- Date/build-versioned labels (boxdrive, nomad, Teams): version-shape guard
-  rejects to null. Version normalization deferred to resolver redesign.
+  Read the following files and apply title case fixes. Text changes only.
+  No style changes. Title case rules: capitalize first and last word always;
+  capitalize nouns, verbs, adjectives, adverbs; lowercase articles (a, an,
+  the), prepositions under 5 letters (on, at, in, of, to, by, up),
+  coordinating conjunctions (and, but, or, nor); capitalize first word
+  after a colon.
 
-## Next session priority order
-1. CONSOLE REDESIGN IMPLEMENTATION. Chip drives Claude Code. Branch off main.
-   Token layer -> shell -> dashboard -> app-detail, each commit + Vercel preview,
-   clean npm run build before merge. Drop the four design-reference files in the
-   repo as the spec. See orchardpatch-claude-code-build-spec.md.
-2. Apps inventory list + device-detail design passes.
-NOTE: resolver design is DONE (A/B/C shipped). Console design is DONE (Dashboard
-+ App detail references locked). Do not re-open either in Opus unless a genuine
-new question surfaces.
+  In src/components/Topbar.tsx:
+  - "Synced today" -> "Synced Today"
 
-## Waitlist page (orchardpatch-waitlist repo)
+  In src/app/apps/[id]/page.tsx:
+  - "Installed on {n} devices" -> "Installed on {n} Devices"
+  - "Patch history" -> "Patch History"
+  - "No recent patch history for this app." ->
+    "No Recent Patch History for This App."
+  - "Up to date with the vendor" -> "Up to Date with the Vendor"
+  - "Up to date" (action column) -> "Up to Date"
+  - "Patch a single device, or use Patch all outdated above" ->
+    "Patch a Single Device, or Use Patch All Outdated Above"
 
-### Current state (June 22, 2026)
-Live at https://orchardpatch.com. 12 signups as of June 21 (organic).
-Stack: Next.js 16.2.0, Tailwind v4, Resend, Google Sheets API.
-Deploy: Vercel, auto-deploys on push to main.
-GitHub PAT does not scope to this repo. Push via SSH only.
+  In src/app/devices/[id]/page.tsx:
+  - "apps installed" in device header stat line -> "Apps Installed"
+  - "system" in device header stat line -> "System"
+  - "outdated" in device header stat line -> "Outdated"
 
-### Capture mechanism
-- Resend: owner notification to info@orchardpatch.com on every signup.
-- Google Sheets: dual-write confirmed working in production.
-- Deduplication: reads column A before appending.
-- Fleet size: optional dropdown (1-10, 11-50, 51-200, 201-1,000, 1,000+).
+  Run npm run build, confirm clean, commit with message:
+  copy: title case fixes across topbar, app detail, device detail
+  Push to origin design/liquid-glass.
 
-### Page structure (June 22 state)
-1. Nav: white (#ffffff)
-2. Hero (signup form): gray (#e8e8e8)
-3. THE PROBLEM: white (#ffffff)
-4. THE SOLUTION: gray (#e8e8e8)
-5. PATCH GRANULARITY: white (#ffffff)
-6. HOW IT WORKS: gray (#e8e8e8)
-7. Bottom CTA (signup form): white (#ffffff)
-8. Footer: gray (#e8e8e8)
+**Known deferred issues (not blocking merge after title case fix):**
+- Button corner clipping on "Patch All Outdated" in Dashboard Orchard card.
+  overflow: hidden removed from cardStyle but issue persists. Root cause
+  suspected: WebKit backdrop-filter stacking context clipping child border-
+  radius. Root cause unconfirmed -- DevTools verification needed. Deferred.
+- zoom.us version format: "7.1.0 (83064)" vs "7.1.0.83064" -- after
+  normalizeVersion both become "7.1.0". versionGt handles correctly (patchable).
+  May be legitimate build increment or format difference. Monitor.
+- Lagging state not yet verified with real fleet data. Logic is correct.
+  True lagging requires vendor ahead of Installomator -- may occur naturally
+  as fleet data grows. Firefox showed false lagging (Homebrew behind
+  Installomator at 152.0.2 vs 152.0.3) which the directional fix resolved.
+- Title case audit not yet applied to Dashboard, Patch History, Catalog,
+  Devices list, Settings pages. Apply as a follow-up pass after merge.
 
-### Design
-- Light mode. macOS 27 Finder-inspired aesthetic.
-- Cards: white (#ffffff), 1px solid #c5c5c7 border, rounded-3xl (24px).
-- Green: #2d6e1f for feature card headings, #4a7c2f for CTA buttons,
-  #7dd94a for logo "Patch" wordmark only.
-- Section label pills: #1d1d1f fill, white text, font-semibold.
-- Footer: "Built for Mac admins, by a Mac admin."
-- Privacy popover + contact copy-on-click on email address.
+### Shipped (console redesign -- June 25, 2026)
+- **Site-wide Tailwind audit.** SearchBar, AgentBanner, VersionChart,
+  VersionChartWrapper, HomePageInner stragglers, patches/page stragglers,
+  reports/page stragglers, integrations/page fully converted.
+- **Sidebar icons.** DashboardIcon: layout rect. SettingsIcon: horizontal
+  sliders. Both hand-rolled SVGs matching existing viewBox/strokeWidth spec.
+- **Dashboard full design pass.** Clickable metric cards and top outdated rows,
+  HomePageInner URL filter init, donut five segments, legend five clickable rows,
+  statusCounts dedup + MAS/System split, scroll container, Sync now wiring,
+  ThemeToggle topbar removal, missing token additions, PinSlot hover.
+- **App Inventory.** Emoji -> dots. Subtitle copy. Dropdown opacity/z-index/
+  padding fixes across dropdown-menu.tsx and select.tsx. Filter button padding.
+- **App detail full design pass.** latestAvailable surfaced, normalizeVersion
+  and versionGt helpers, resolver state derivation (unknown/patchable/lagging/
+  current), version hero card four states with progressive disclosure, fleet
+  installations conditional action column, Fruit/Bushel modal titles and footers.
+- **Device detail full design pass.** Full token conversion, cardStyle/table
+  wrapper cleanup, APPS DETECTED section header, Branch modal title/footer,
+  Force Check-In three-state button, Patch All Outdated button, dot indicators.
+- **Shadcn patches.** dropdown-menu.tsx, select.tsx, table.tsx inline style
+  fixes for Tailwind purge.
+- **Copy standards locked.** No em dashes, no emoji, title case rules,
+  no possessives, dot indicators with CSS variable tokens.
+- **Patch modal footers.** All four modals have quiet tier name footer.
+  Modal titles updated (Fruit dynamic, Branch "Patch Device").
 
-### Copy principles
-- No em dashes anywhere.
-- Installomator mentioned in patching context only, never discovery.
-- No vendor name-drops.
-- Problem section frames a gap MDMs were not built to fill, not an MDM failure.
-- Brand names (Fruit/Branch/Bushel/Orchard) kept off the page.
-- Cultivation not mentioned.
-
-## Brand color note
-CONSOLE primary is now LOCKED (June 23) to hunter green #3d7a42 (+ mint #74cc7c
-on-dark). Lime #7dd94a is RETIRED from the console. The earlier "~#355E3B
-preferred direction / defer to a brand session" note is superseded: the call was
-made this session, landing on #3d7a42 (brighter and more decisive than the
-Pantone #335749, AA on white). The console deliberately does NOT match the
-marketing logo; marketing/waitlist keeps its own greens (#2d6e1f text, #4a7c2f
-buttons, #7dd94a logo only). Because the console is fully tokenized (primitives
--> semantic -> components), any future palette shift is a single primitive-token
-change, not a re-skin. See the CONSOLE DESIGN SYSTEM section.
-
-## Lessons learned (June 12-13)
-- The single most valuable pattern: verify documented architecture against
-  actual code before building on it.
-- launchctl list's exit-code/runs fields reflect history, not current state.
-  Always confirm with ps aux.
-- Token rotation has three components: Railway SERVER_TOKEN, Vercel token env
-  var, AND /etc/orchardpatch/config.json on every managed machine.
-- Hardcoded secret fallbacks in source code are worse than NEXT_PUBLIC exposure.
-  Always fail loudly (503).
-- The 15-minute agent poll interval creates real testing friction. Phase 6 is
-  a prerequisite for fast iteration. (Now resolved.)
-
-## Lessons learned (June 16)
-- Installomator only reads KEY=VALUE flags from positional args (eval $1 loop).
-- execSync can ETIMEDOUT in a LaunchDaemon root environment. Prefer spawn.
-- Exit code 23 = MAS install. Not a version issue.
-- Vercel NEXT_PUBLIC_ vars are inlined at build time even in server-only files.
-- Token rotation: Vercel sensitive vars cannot be retrieved after saving.
-- DEBUG=1 does NOT skip downloads in Installomator. Only skips install step.
-- Version-check errors land in agent.error.log (stderr), not agent.log.
-- Python heredoc mangles regex/SQL escape sequences. Use direct file edits.
-- Unconditional ON CONFLICT overwrites can clobber good values. Guard them.
-- Latest-version resolution is global, not per-device. Per-agent is the wrong
-  shape. Server-side resolver is the real fix.
-
-## Lessons learned (June 21-22 -- waitlist)
-- Installomator and app discovery are separate mechanisms. Keep copy distinct.
-- installomator.com is a third-party SEO site. Official: github.com/Installomator.
-- Frame MDM limitations as gaps, not failures.
-- mailto + target="_blank" opens blank tabs. Never combine them.
-- #7dd94a has insufficient contrast on white for text. Use #2d6e1f for text.
-- Stats strips become redundant when page copy covers same claims in context.
-
-## Lessons learned (June 23 -- Phase 6 design)
-- A grace period is a guess; FOR UPDATE is a guarantee. When you can get a
-  guarantee, do not ship a guess.
-- Mechanism safety and human undo are SEPARATE concerns. Row lock handles
-  collisions; deferred enqueue handles misclicks.
-- Key the undo window on MODE (silent = uninterruptible surprise), not tier.
-- Implement an undo window as ABSENCE of a queue row, not a flag on an
-  existing row.
-- A garbage collector must not make policy decisions. Mark failed, let
-  inventory replace the guess with a fact.
-- Jamf 3-retry is retry on a KNOWN failure. Our abandonment is an UNKNOWN
-  outcome. Different risk profile -- do not copy it.
-- Don't derive constants cross-repo. Breaks silently when the other side
-  changes.
-- An allowlist can BE an auth boundary. Make the deferral loud.
-- Idempotency is a table-wide contract once re-delivery is possible.
-- Decompose agent loops by FUNCTION (control plane vs heartbeat), not data type.
-
-## Lessons learned (June 23 -- Phase 6 implementation)
-- pool.query('BEGIN') does not guarantee all subsequent queries land on the
-  same connection. Use pool.connect() + client.query() for all transactions.
-  client.release() in a finally block is mandatory to avoid pool exhaustion.
-- When Chip flags a correctness issue, fix it before committing. "Probably
-  works" is not the bar for a cleanup function.
-- Audit the exact codebase before implementing. Read before writing.
-- claimed_at lives on pending_patches, not patch_jobs. FOR UPDATE must lock
-  the table that holds the column you're branching on.
-- Deferred enqueue (setTimeout) and the cancel handler interact. Ship both
-  in the same commit.
-- For large Chip output, ask Chip to write to a Desktop file so Jude can
-  copy from a text editor. Telegram blocks large clipboard copies.
-
-## Lessons learned (June 22 -- prior session)
-- LaunchDaemon plists are world-readable (644 by default). Never put secrets
-  in EnvironmentVariables blocks. config.json at root:wheel 600 is the right
-  home for agent secrets.
-- process.env mutation at startup (applyConfigEnv) is the clean way to inject
-  config-sourced secrets into child process environments without touching every
-  spawn call site.
-- Audit before writing: Chip correctly identified that the spawn was inside
-  version-checker.js, not scheduler.js, which changed the implementation
-  approach. Always understand the actual call graph first.
-- Don't build UI features (day grouping) to paper over a data presentation
-  problem (no timestamp on rows). The right fix was full datetime on every row.
-- Verify Chip's exit code interpretations against CONTEXT.md. exit 23 is MAS,
-  not "app was open." Wrong interpretation in the diff; caught before shipping.
-- React.Fragment shorthand (<>) does not accept a key prop. Use
-  <React.Fragment key={...}> for keyed fragment wrappers.
-- A good TL;DR is personality, not just information. "TL;DR" lands better than
-  "SUMMARY" for a Mac admin audience.
-- Manual agent deploys are not a production update path. Every agent change
-  currently requires a manual deploy -- this is a pre-launch gate, not a
-  temporary inconvenience.
-
-## Lessons learned (June 22 -- Deep Dive session, resolver + console sequencing)
-- The single-number "outdated" invariant hid a quiet false-negative: vendor
-  ships a security fix, Installomator lags, dashboard says "current," fleet is
-  exposed. Two numbers (patchable + available) and a "lagging" state fix it,
-  AND the gap is a differentiator no competitor can state.
-- The installed app has a real CFBundleIdentifier even though bundleID is dead
-  in the Installomator fragment corpus. Two different corpora. Keying identity
-  on the installed bundle ID is the unlock that makes the resolver, MAS
-  detection, and the Telegram mismatch all fall out of one model.
-- Storage medium is decided by the FUTURE constraint, not present convenience.
-  Curated mappings go in the DB (not a file) because they become per-org at
-  multi-tenancy and per-org data cannot live in a shared repo.
-- "Console UI redesign" was hiding a strategic decision about outreach timing.
-  The resolver is the demo's differentiator. The binding constraint on GREAT
-  outreach is the resolver, not the console.
-- Doing the resolver Deep Dive BEFORE the console redesign means the console can
-  bake in the resolver IA as empty slots with zero rework.
-- Tokenization is the clean resolution to "don't polish what you've decided to
-  replace." A tokenized color is a variable, not throwaway work.
-- Record candidates, decide precedence later. When a policy choice depends on
-  data you do not have yet, capture every input and defer the choice.
-- Failed version coercion resolves to Unknown, never Current. Fail-safe
-  direction is toward visibility.
-
-## Lessons learned (Phase A -- June 22, 2026)
-- config.json structure must be verified against actual file, not assumed from
-  docs. The actual structure is { server: { url, token }, githubToken } --
-  not a flat { serverToken, githubToken } as prior notes implied.
-- Never paste DATABASE_URL or credentials into the Chip chat. Credentials in
-  conversation logs are a security risk. Verify DB changes via indirect signals
-  (server health, application behavior) or Railway dashboard.
-- Server health + startup success is sufficient verification for additive
-  schema migrations. CREATE TABLE inside the startup pool.query block crashes
-  the server if it fails -- a healthy server is confirmation enough.
-- The checkin payload uses camelCase (bundleId, installomatorLabel, name).
-  Server-side SQL uses snake_case. Always confirm field names from actual
-  code before speccing SQL that references them.
-- A conditional guard (MAS check outermost in JSX) is cleaner than patching
-  the data model when the data is already correct. The Patch button hide
-  needed no backend change -- just the right conditional order in the frontend.
-- Verifying MAS detection requires a machine that actually has MAS apps.
-  Zero MAS apps on Chip's machine is the correct answer, not a bug.
-  Always check both machines when the feature is source-dependent.
-- DaVinci Resolve and Slack can be either MAS or direct download depending on
-  the machine. Do not assume uniform source across the fleet for the same app.
-
-## Lessons learned (Phase B + C -- June 23, 2026)
-- node-fetch v3 is ESM-only. require('node-fetch') throws at runtime. Use
-  async import() pattern instead. Always check what pattern the existing
-  codebase uses (catalog-sync.js) before adding new fetch calls.
-- Homebrew cask artifact arrays can contain objects, not just strings. A type
-  guard (typeof appFile !== 'string' -> continue) is required before calling
-  string methods. Third-party data is never as clean as the docs suggest.
-- Always match the params array length to the SQL placeholder count ($1-$N).
-  A missing element shifts all subsequent values left -- source gets the url
-  value, source_url gets the candidates JSON. The error message "bind message
-  supplies N parameters, but prepared statement requires M" is unambiguous.
-- Per-resolver write-direct is a bug the moment a second resolver exists.
-  The second write overwrites the first's candidates. Return Maps from each
-  resolver, merge in a coordinator. Design for the second resolver before
-  shipping the first.
-- Railway restart (not redeploy) is sufficient to trigger the 30-second cron
-  startup delay for quick verification. Useful for testing resolver runs
-  without waiting 24 hours.
-- The two-pipeline model pays off immediately: coconutBattery has a broken
-  patchable pipeline (Installomator scrapes HTML) but a working available
-  pipeline (Homebrew has the correct version). Two numbers, two sources of
-  truth, independent failure modes.
-- Verify against the actual status bar math after any frontend category change.
-  A new category can cause apps to vanish from the count if the bucket has no
-  home in the rendering code.
-## Lessons learned (June 23 -- console design)
-- Tokenizing first made dark mode and the OS-follow toggle nearly free. Three
-  layers (primitives -> semantic -> components) means a palette swap or a whole
-  second theme is a values change, not a component change.
-- A fixed diagonal "shine" across a glass face reads as Web 2.0 gloss. Modern
-  glass catches light at the EDGES (thin top-edge highlight) and through the
-  material (backdrop blur), never as a painted face streak.
-- Liquid Glass = mostly neutral frosted surfaces with a FEW saturated, luminous
-  accents. Uniform muting is wrong; uniform glow (neon rim) is also wrong (reads
-  gaming). Spend boldness in a few accent spots.
+## Design philosophy notes (established through console redesign)
+- OrchardPatch green is #3d7a42 (console, AA on white). Marketing keeps its
+  own greens. Do not conflate them.
+- Glass surfaces: backdrop-filter blur(20px) + saturate(180%) + -webkit- prefix.
+  Always pair with border-hairline + shadow-card. Never use color-mix() for
+  structural alternation -- use --surface-raised instead.
+- "Calm authority" is the visual register. Muted surfaces, precise type,
+  restrained use of color (amber for action, red reserved for lagging only).
+  No gradients on data. No animation on state (gaming). Spend boldness in a
+  few accent spots.
 - For a Mac admin audience, honesty is the differentiator, not visual loudness.
   The lagging state stated precisely and calmly (Installomator-safe "for now")
   lands better than a red alarm. Alarm fatigue erodes trust with technical
