@@ -259,6 +259,7 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
         EXTRACT(EPOCH FROM (NOW() - lv.last_checked::timestamptz))::int AS cache_age_seconds,
         a.source,
         COALESCE(a.installomator_label, ac.label) AS label,
+        rv.latest_available,
         CASE
           WHEN a.source = 'system' THEN 'na'
           WHEN a.source = 'mas' THEN 'na'
@@ -270,6 +271,7 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
       LEFT JOIN app_catalog ac ON ac.bundle_id = a.bundle_id
       LEFT JOIN latest_versions lv
         ON lv.label = COALESCE(a.installomator_label, ac.label)
+      LEFT JOIN resolved_versions rv ON rv.bundle_id = a.bundle_id
       ${whereClause}
       ORDER BY a.name
     `, params);
