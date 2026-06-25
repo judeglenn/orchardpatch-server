@@ -1,11 +1,8 @@
 # OrchardPatch -- Project Context
 
-Last updated: June 25, 2026 (Console redesign nearly complete on branch
-design/liquid-glass, last commit this session: 0cfc0e0. Dashboard, App detail,
-and Device detail all converted and visually reviewed on Vercel preview.
-One pending task before merge: title case fixes on Topbar.tsx,
-apps/[id]/page.tsx, and devices/[id]/page.tsx -- see Next Session Priority
-Order for the exact prompt to send Chip.)
+Last updated: June 25, 2026 (Console redesign COMPLETE. design/liquid-glass
+merged to main via fast-forward. Tip of main: 45aa6b6. Production confirmed
+clean at app.orchardpatch.com. Next: demo video, polished repo, outreach.)
 
 ## What OrchardPatch is
 A Mac admin tool providing complete visibility into managed macOS fleet apps
@@ -423,8 +420,8 @@ Decided sequence:
 1. Resolver Phase A -- SHIPPED June 22.
 2. Resolver Phase B (Homebrew source, real data) -- SHIPPED June 23.
 3. Resolver Phase C (Sparkle + GitHub + candidate recording) -- SHIPPED June 23.
-4. Console redesign, all surfaces, fully tokenized -- NEARLY COMPLETE (June 25).
-   One title case commit remaining before merge to main.
+4. Console redesign, all surfaces, fully tokenized -- SHIPPED June 25.
+   Merged to main via fast-forward. Tip of main: 45aa6b6.
 5. Demo video + polished repo.
 6. Outreach (MacAdmins Slack + contribution-first maintainer contact).
 
@@ -491,8 +488,7 @@ Unknown means genuinely unpatchable via Installomator, not a bug.
 ## UI homes for each tier
 - Fruit: app detail page fleet installations table (per-device Patch button).
   Also device detail page per-app Patch button.
-- Branch: device detail page, "Patch All Outdated" button (renamed June 25
-  from "Patch This Device")
+- Branch: device detail page, "Patch All Outdated" button
 - Bushel: app detail page, "Patch All Outdated" button
 - Orchard: Fleet Dashboard (/dashboard), "Patch All Outdated" card
 - Catalog: /catalog page (SHIPPED June 13)
@@ -611,10 +607,18 @@ not hardcoded in logic. Future sources slot in naturally.
   tool, NOT Python.
 - Context is lost when Chip compacts -- use this file to restore.
 - Start Claude.ai sessions by opening OrchardPatch project (CONTEXT.md loaded)
-- End every session: update CONTEXT.md, paste to Chip, commit. Also produce
-  session handoff file for next session. PREFERENCE: full CONTEXT.md rewrites
-  at session end, not insertion blocks. Preserve ALL existing detail -- do not
-  summarize or compress prior sessions' content.
+- CONTEXT.md handoff workflow (locked June 25): Jude pastes or attaches
+  CONTEXT.md to Chip at session end. Chip saves to disk at
+  ~/Projects/orchardpatch-server/CONTEXT.md and commits. Next session Chip
+  reads directly from disk -- no Telegram relay, no truncation risk.
+  Claude.ai project file stays in sync as the source of truth for Claude
+  sessions (upload after Chip commits).
+- OpenClaw UI indicator: "Pearling" is an OpenClaw processing indicator that
+  appears while Chip is thinking/streaming and disappears when done. Not a
+  model identifier. Chip confirmed running anthropic/claude-sonnet-4-6.
+- End every session: update CONTEXT.md, hand to Chip to commit. PREFERENCE:
+  full CONTEXT.md rewrites at session end, not insertion blocks. Preserve ALL
+  existing detail -- do not summarize or compress prior sessions' content.
 - Standing rule: always fix bugs at root cause. Never suggest workarounds.
   If a workaround is needed to unblock testing, flag it explicitly as tech
   debt before moving on.
@@ -808,9 +812,9 @@ in the server POST /patch handler. The proxy passes mode through as-is.
 
 ## Feature status
 
-### Console redesign -- IN PROGRESS (branch design/liquid-glass, June 25)
-Branch: design/liquid-glass. Last commit this session: 0cfc0e0.
-One pending task before merge -- see PENDING section below.
+### Console redesign -- SHIPPED (merged to main June 25, 2026)
+Branch design/liquid-glass merged via fast-forward. Tip of main: 45aa6b6.
+35 files changed, 5004 insertions, 2553 deletions. Production confirmed clean.
 
 **Hard constraints (non-negotiable for all new work):**
 - Zero hardcoded hex in components. CSS variable tokens only.
@@ -906,6 +910,14 @@ CSS variable tokens + inline style props:
 - Last outdated app row: no borderBottom.
 - Pinned slots: hover state transitions border + text to var(--accent) via
   PinSlot component with useState.
+- Title case applied: "Fleet Health", "Top Outdated Apps", "View All",
+  "Patchable Now", "Up to Date", "No Label Yet", "Apple Managed",
+  "Queue Patches Across Your Entire Fleet", "Patch All Outdated".
+- Orchard button corner clip RESOLVED: transform: translateZ(0) forces the
+  button onto its own compositing layer, escaping WebKit backdrop-filter
+  stacking context clip. Root cause confirmed: backdrop-filter on card's
+  <section> creates a compositing layer that clips descendants at card's
+  border-radius even without overflow: hidden.
 
 **App Inventory (/apps) -- COMPLETE (June 25):**
 - Status bar: dot indicators, no emoji. Five categories.
@@ -938,7 +950,7 @@ CSS variable tokens + inline style props:
     "Installed everywhere, matches the latest the vendor has shipped." prose
   - patchable: two columns (INSTALLED -> PATCHABLE), amber patchable number,
     "across N devices" sub-label if diverged, inline Patch CTA button with
-    "Up to date with the vendor" note. Smart modal routing: Bushel if multi-
+    "Up to Date with the Vendor" note. Smart modal routing: Bushel if multi-
     device, Fruit if single.
   - lagging: three columns (INSTALLED -> PATCHABLE -> VENDOR LATEST). Installed
     in --text-primary, patchable in --st-outdated (amber), vendor latest in
@@ -959,6 +971,10 @@ CSS variable tokens + inline style props:
 - Fruit modal footer: "Patch by the Fruit · Single App, Single Device"
 - Bushel modal footer: "Patch by the Bushel · Single App, All Devices"
 - cardStyle: overflow hidden removed.
+- Title case applied: "Installed on {n} Devices", "Patch History",
+  "No Recent Patch History for This App.", "Up to Date with the Vendor",
+  "Up to Date" (action column), "Patch a Single Device, or Use Patch All
+  Outdated Above".
 
 **Device detail (/devices/[id]) -- COMPLETE (June 25):**
 - Full token conversion: zero hardcoded hex remaining.
@@ -967,7 +983,7 @@ CSS variable tokens + inline style props:
 - overflow: hidden removed from card and table wrapper.
 - Table wrapper: padding 0 12px so content breathes from card edge.
 - Section header: "APPS DETECTED"
-- Subtitle: "{n} installed · {n} outdated"
+- Subtitle: "{n} Installed · {n} Outdated"
 - Force Check-In button: three states via inline state -- idle (--text-primary),
   success (--st-current), error (--st-lagging). "Results Appear Within 60
   Seconds" note. Auto-clears after 3s.
@@ -980,45 +996,10 @@ CSS variable tokens + inline style props:
 - color-mix() used for semantic status tints (outdated badge, error state bg) --
   correct since these need semantic color. Table row alternation uses
   --surface-raised instead of color-mix (structural, not semantic).
-- Title case audit applied (June 25). See PENDING for remaining files.
+- Title case applied: "Apps Installed", "System", "Outdated" in stat line;
+  "Up to Date" in action column.
 
-**PENDING before merge (next session first task):**
-Chip ran out of credits before executing this commit. Send verbatim:
-
-  Read the following files and apply title case fixes. Text changes only.
-  No style changes. Title case rules: capitalize first and last word always;
-  capitalize nouns, verbs, adjectives, adverbs; lowercase articles (a, an,
-  the), prepositions under 5 letters (on, at, in, of, to, by, up),
-  coordinating conjunctions (and, but, or, nor); capitalize first word
-  after a colon.
-
-  In src/components/Topbar.tsx:
-  - "Synced today" -> "Synced Today"
-
-  In src/app/apps/[id]/page.tsx:
-  - "Installed on {n} devices" -> "Installed on {n} Devices"
-  - "Patch history" -> "Patch History"
-  - "No recent patch history for this app." ->
-    "No Recent Patch History for This App."
-  - "Up to date with the vendor" -> "Up to Date with the Vendor"
-  - "Up to date" (action column) -> "Up to Date"
-  - "Patch a single device, or use Patch all outdated above" ->
-    "Patch a Single Device, or Use Patch All Outdated Above"
-
-  In src/app/devices/[id]/page.tsx:
-  - "apps installed" in device header stat line -> "Apps Installed"
-  - "system" in device header stat line -> "System"
-  - "outdated" in device header stat line -> "Outdated"
-
-  Run npm run build, confirm clean, commit with message:
-  copy: title case fixes across topbar, app detail, device detail
-  Push to origin design/liquid-glass.
-
-**Known deferred issues (not blocking merge after title case fix):**
-- Button corner clipping on "Patch All Outdated" in Dashboard Orchard card.
-  overflow: hidden removed from cardStyle but issue persists. Root cause
-  suspected: WebKit backdrop-filter stacking context clipping child border-
-  radius. Root cause unconfirmed -- DevTools verification needed. Deferred.
+**Known deferred issues:**
 - zoom.us version format: "7.1.0 (83064)" vs "7.1.0.83064" -- after
   normalizeVersion both become "7.1.0". versionGt handles correctly (patchable).
   May be legitimate build increment or format difference. Monitor.
@@ -1026,34 +1007,52 @@ Chip ran out of credits before executing this commit. Send verbatim:
   True lagging requires vendor ahead of Installomator -- may occur naturally
   as fleet data grows. Firefox showed false lagging (Homebrew behind
   Installomator at 152.0.2 vs 152.0.3) which the directional fix resolved.
-- Title case audit not yet applied to Dashboard, Patch History, Catalog,
-  Devices list, Settings pages. Apply as a follow-up pass after merge.
+- Title case audit not yet applied to Patch History, Catalog, Devices list,
+  Settings pages. Apply as a follow-up pass.
 
 ### Shipped (console redesign -- June 25, 2026)
-- **Site-wide Tailwind audit.** SearchBar, AgentBanner, VersionChart,
-  VersionChartWrapper, HomePageInner stragglers, patches/page stragglers,
-  reports/page stragglers, integrations/page fully converted.
+- **Full console redesign merged to main.** 35 files, fast-forward merge.
+  design/liquid-glass tip: 45aa6b6. Production confirmed clean.
+- **Site-wide Tailwind cleanup.** All files converted to inline styles.
 - **Sidebar icons.** DashboardIcon: layout rect. SettingsIcon: horizontal
-  sliders. Both hand-rolled SVGs matching existing viewBox/strokeWidth spec.
+  sliders. Both hand-rolled SVGs.
 - **Dashboard full design pass.** Clickable metric cards and top outdated rows,
-  HomePageInner URL filter init, donut five segments, legend five clickable rows,
-  statusCounts dedup + MAS/System split, scroll container, Sync now wiring,
-  ThemeToggle topbar removal, missing token additions, PinSlot hover.
-- **App Inventory.** Emoji -> dots. Subtitle copy. Dropdown opacity/z-index/
-  padding fixes across dropdown-menu.tsx and select.tsx. Filter button padding.
-- **App detail full design pass.** latestAvailable surfaced, normalizeVersion
-  and versionGt helpers, resolver state derivation (unknown/patchable/lagging/
-  current), version hero card four states with progressive disclosure, fleet
-  installations conditional action column, Fruit/Bushel modal titles and footers.
-- **Device detail full design pass.** Full token conversion, cardStyle/table
-  wrapper cleanup, APPS DETECTED section header, Branch modal title/footer,
-  Force Check-In three-state button, Patch All Outdated button, dot indicators.
-- **Shadcn patches.** dropdown-menu.tsx, select.tsx, table.tsx inline style
-  fixes for Tailwind purge.
-- **Copy standards locked.** No em dashes, no emoji, title case rules,
-  no possessives, dot indicators with CSS variable tokens.
-- **Patch modal footers.** All four modals have quiet tier name footer.
-  Modal titles updated (Fruit dynamic, Branch "Patch Device").
+  donut five segments, legend five clickable rows, statusCounts dedup,
+  MAS/System split, scroll container, Sync now wiring, ThemeToggle sidebar.
+- **App Inventory.** Emoji to dots. Subtitle. Dropdown fixes.
+- **App detail full design pass.** latest_available in SQL and proxy.
+  normalizeVersion + versionGt helpers. Version hero card four states.
+- **Device detail full conversion.** Zero hardcoded hex. All four modal footers.
+- **Copy standards.** No emoji (dots only). Title case. No possessives.
+  Tier name footers on all four patch modals. App Inventory subtitle.
+- **Button corner clip fixed.** translateZ(0) on Orchard button. Root cause
+  confirmed: WebKit backdrop-filter compositing layer clips descendants at
+  card border-radius. translateZ(0) forces button onto its own compositing
+  layer, escaping the clip.
+- **Title case sweep.** Dashboard, App detail, Device detail all complete.
+
+### Shipped (Phase C -- June 23, 2026)
+- **Sparkle resolver.** src/lib/resolvers/sparkle.js. 2/3 feeds resolved.
+- **GitHub resolver.** src/lib/resolvers/github.js. Infrastructure ready,
+  0 rows (no github_repo entries yet).
+- **Candidate recording.** resolver-cron.js merges all sources, picks winner
+  by trust order, records all candidates as JSONB, sets conflict flag.
+- **Phase C agent.** inventory.js reads SUFeedURL from Info.plist, sends as
+  sparkleFeedUrl in check-in payload. checkin.js guard broadened.
+- **resolved_versions populated.** 30 rows from Homebrew; 2 upgraded to
+  sparkle (higher trust).
+
+### Shipped (Phase B -- June 23, 2026)
+- **Homebrew resolver.** src/lib/resolvers/homebrew.js. 30/36 matched.
+- **app_identity.homebrew_cask** populated for 30 rows.
+- **resolver-cron.js** wired: 30s post-startup, then 24h.
+
+### Shipped (Phase A -- June 22, 2026)
+- **app_identity table.** bundle_id PK, all source columns, curated flag.
+- **resolved_versions table.** Schema with JSONB candidates + conflict.
+- **MAS detection.** source='mas' on inventory. Patch button hidden.
+- **patch_status SQL.** WHEN source='mas' THEN 'na'.
+- **bootstrapIdentity.** Runs on startup, catalog-sync, and check-in.
 
 ## Design philosophy notes (established through console redesign)
 - OrchardPatch green is #3d7a42 (console, AA on white). Marketing keeps its
