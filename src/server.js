@@ -264,7 +264,14 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
           WHEN a.source = 'system' THEN 'na'
           WHEN a.source = 'mas' THEN 'na'
           WHEN lv.latest_version IS NULL THEN 'unknown'
-          WHEN a.version = lv.latest_version THEN 'current'
+          WHEN regexp_replace(
+            regexp_replace(a.version, '\s*\([^)]*\)', '', 'g'),
+            ',.*', ''
+          ) =
+          regexp_replace(
+            regexp_replace(lv.latest_version, '\s*\([^)]*\)', '', 'g'),
+            ',.*', ''
+          ) THEN 'current'
           ELSE 'outdated'
         END AS patch_status
       FROM apps a
