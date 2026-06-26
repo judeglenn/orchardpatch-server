@@ -214,13 +214,13 @@ app.get("/devices", apiRateLimit, authMiddleware, async (req, res) => {
             AND a.source NOT IN ('system', 'mas')
             AND regexp_replace(
               regexp_replace(
-                regexp_replace(a.version, '\s*\([^)]*\)', '', 'g'),
+                regexp_replace(a.version, '\\s*\\([^)]*\\)', '', 'g'),
                 ',.*', ''
               ),
               '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
             ) IS DISTINCT FROM regexp_replace(
               regexp_replace(
-                regexp_replace(lv.latest_version, '\s*\([^)]*\)', '', 'g'),
+                regexp_replace(lv.latest_version, '\\s*\\([^)]*\\)', '', 'g'),
                 ',.*', ''
               ),
               '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
@@ -279,14 +279,14 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
           WHEN lv.latest_version IS NULL THEN 'unknown'
           WHEN regexp_replace(
             regexp_replace(
-              regexp_replace(a.version, '\s*\([^)]*\)', '', 'g'),
+              regexp_replace(a.version, '\\s*\\([^)]*\\)', '', 'g'),
               ',.*', ''
             ),
             '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
           ) =
           regexp_replace(
             regexp_replace(
-              regexp_replace(lv.latest_version, '\s*\([^)]*\)', '', 'g'),
+              regexp_replace(lv.latest_version, '\\s*\\([^)]*\\)', '', 'g'),
               ',.*', ''
             ),
             '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
@@ -365,14 +365,14 @@ app.get("/api/stats/patch-status", apiRateLimit, authMiddleware, async (req, res
             WHEN lv.latest_version IS NULL THEN 'unknown'
             WHEN regexp_replace(
               regexp_replace(
-                regexp_replace(a.version, '\s*\([^)]*\)', '', 'g'),
+                regexp_replace(a.version, '\\s*\\([^)]*\\)', '', 'g'),
                 ',.*', ''
               ),
               '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
             ) =
             regexp_replace(
               regexp_replace(
-                regexp_replace(lv.latest_version, '\s*\([^)]*\)', '', 'g'),
+                regexp_replace(lv.latest_version, '\\s*\\([^)]*\\)', '', 'g'),
                 ',.*', ''
               ),
               '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
