@@ -128,9 +128,9 @@ router.get('/', async (req, res) => {
 
     var dataSql;
     if (q) {
-      dataSql = 'SELECT ac.label, ac.app_name, ac.bundle_id, ac.expected_team, ac.last_synced, COALESCE(ic.has_conflict, false) AS has_conflict FROM app_catalog ac LEFT JOIN (SELECT token, true AS has_conflict FROM identity_conflicts WHERE source = 'installomator_label' AND resolved = false GROUP BY token) ic ON ac.label = ic.token WHERE (ac.label ILIKE $1 OR ac.app_name ILIKE $1) ORDER BY ac.app_name ASC LIMIT $2 OFFSET $3';
+      dataSql = 'SELECT ac.label, ac.app_name, ac.bundle_id, ac.expected_team, ac.last_synced, COALESCE(ic.has_conflict, false) AS has_conflict FROM app_catalog ac LEFT JOIN (SELECT token, true AS has_conflict FROM identity_conflicts WHERE source = \'installomator_label\' AND resolved = false GROUP BY token) ic ON ac.label = ic.token WHERE (ac.label ILIKE $1 OR ac.app_name ILIKE $1) ORDER BY ac.app_name ASC LIMIT $2 OFFSET $3';
     } else {
-      dataSql = 'SELECT ac.label, ac.app_name, ac.bundle_id, ac.expected_team, ac.last_synced, COALESCE(ic.has_conflict, false) AS has_conflict FROM app_catalog ac LEFT JOIN (SELECT token, true AS has_conflict FROM identity_conflicts WHERE source = 'installomator_label' AND resolved = false GROUP BY token) ic ON ac.label = ic.token ORDER BY ac.app_name ASC LIMIT $1 OFFSET $2';
+      dataSql = 'SELECT ac.label, ac.app_name, ac.bundle_id, ac.expected_team, ac.last_synced, COALESCE(ic.has_conflict, false) AS has_conflict FROM app_catalog ac LEFT JOIN (SELECT token, true AS has_conflict FROM identity_conflicts WHERE source = \'installomator_label\' AND resolved = false GROUP BY token) ic ON ac.label = ic.token ORDER BY ac.app_name ASC LIMIT $1 OFFSET $2';
     }
 
     var dataResult = await pool.query(dataSql, dataParams);
