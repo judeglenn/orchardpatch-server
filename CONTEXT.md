@@ -1,20 +1,17 @@
 # OrchardPatch -- Project Context
 
-Last updated: June 26, 2026 (Multi-variant identity session, Opus. Followed the
-branch-patch/zoom session earlier the same day. Diagnosed the PyCharm CE
-collision to its root: name-derived identity matching is variant-blind, and MAS
-status did not gate derivation. Designed Phase 1 identity fix (LOCKED spec, ready
-for Sonnet). Designed soft-delete app lifecycle (LOCKED, replaces a dangerous
-hard-prune). Found + routed: catalog case-alias artifact, double
-enrichAppsWithLabels, directory-loop silent catch. Read Installomator docs +
-Jamf App Catalog: 3 CONTEXT corrections (versionKey, packageID framing,
-compares-for-difference) and the conclusion that curation IS the design. Tip of
-orchardpatch-server: e513e8c (unchanged this session -- design only, no server
-commits). Next: relay phase1-verification to Chip, then implement Phase 1.
-Then demo video, polished repo, outreach.)
-
-Pending Chip relay at session start: chip-phase1-verification.md (verification
-only, read-only). Phase 1 implementation does not begin until it returns.
+Last updated: June 26, 2026 (Phase 1 identity fix implementation session, Sonnet.
+Implemented all 5 parts of Phase 1 across 4 relays + 2 follow-up fixes. Also
+shipped the Catalog deploy identity guard (server 9ee2670, frontend 1096270).
+Key corrections from verification: Telegram Opus item CLOSED (ru.keepcoder.Telegram
+correctly targets the telegram label, confirmed via fragment + Homebrew cask primary
+sources). Teams classic has no Homebrew cask (label only, cask NULL). MAS gate
+required 5 points not 3 (homebrew.js UPDATE gap found by Chip during relay 1).
+New open item: conflict auto-resolution pass must be part of soft-delete design --
+without it the Telegram deploy button stays blocked after the orphan ages out.
+New crash: SQL string with inner single quotes inside outer single-quoted JS string
+crash-looped Railway (27d8b00 fixes it). Tip of orchardpatch-server: 27d8b00.
+Next: soft-delete (with conflict auto-resolution pass), then demo video, outreach.)
 
 ## What OrchardPatch is
 A Mac admin tool providing complete visibility into managed macOS fleet apps
@@ -637,7 +634,7 @@ the multi-variant identity collision (see "Multi-variant identity" section). The
 Phase 1 fix makes name-derived writes collision-aware and gates MAS out of
 derivation.
 
-## Multi-variant identity (designed June 26, Phase 1 spec LOCKED)
+## Multi-variant identity -- SHIPPED Phase 1 (June 26, 2026)
 The principle and the Phase 1 fix. Full spec: phase1-identity-spec.md.
 
 THE PRINCIPLE: identity is the installed app's CFBundleIdentifier. Signals that
@@ -655,48 +652,120 @@ label not trusted for the installed bundle_id. A WRONG mapping is worse than a
 MISSING one (missing = visible-but-unpatchable-with-reason; wrong = installs Pro
 over someone's Community). Fail toward missing.
 
-THE FOUR FAMILIES (confirmed via live data + fragment reads, June 26):
+THE FOUR FAMILIES (confirmed via live data + fragment reads + Homebrew cask
+verification, June 26):
 - PyCharm Pro (com.jetbrains.pycharm): label jetbrainspycharm, cask pycharm.
-  Correct. Needs the collision guard so CE stops sharing its tokens.
+  Correct. Protected by curated row so CE stops sharing its tokens.
 - PyCharm CE (com.jetbrains.pycharm.ce): NO valid Installomator label exists.
   jetbrainspycharmce is a case ALIAS inside jetbrainspycharm.sh using product
   code PCP (Professional). Running it installs Pro OVER Community. CE's correct
   answer: label NULL, cask pycharm-ce (real version ~2025.2.5). Visible, not
-  patchable, honest.
-- Teams: NOT a collision. com.microsoft.teams -> microsoftteams,
-  com.microsoft.teams2 -> microsoftteams-rollingout. Two distinct apps, distinct
-  correct labels, both patchable. VALIDATES that the detector keys on shared
-  TOKEN, not shared NAME (Teams shares a name but not a token, so it must not
-  trip the detector).
+  patchable, honest. NOTE: CE is NOT currently installed on Jude's machine --
+  only PyCharm.app (Pro) at ~/Applications. The DB row for CE is stale and ages
+  out with soft-delete.
+- Teams: NOT a collision. com.microsoft.teams -> microsoftteams (label), cask
+  NULL (no Homebrew cask exists for classic Teams). com.microsoft.teams2 ->
+  microsoftteams-rollingout (label), microsoft-teams (cask). Two distinct apps,
+  distinct correct labels. VALIDATES that the detector keys on shared TOKEN, not
+  shared NAME.
 - Canva: com.canva.canvaeditor is MAS (not patchable); com.canva.CanvaDesktop is
-  direct (label canva). MAS-gate dissolves the collision.
-- Telegram: ru.keepcoder.Telegram is the live install on both machines (source=mas
-  on Jude's, source=user on Chip's -- the native non-MAS build, no _MASReceipt,
-  detection is CORRECT). com.tdesktop.Telegram is a STALE ORPHAN on Chip's
-  machine (soft-delete ages it out). Not a live collision once the orphan is gone.
+  direct (label canva, cask canva). MAS-gate dissolves the collision.
+- Telegram: ru.keepcoder.Telegram is the live install on both machines. CONFIRMED
+  (fragment downloadURL, expectedTeamID, Homebrew cask quit identifier all
+  reference ru.keepcoder.Telegram directly). Curated to label telegram, cask
+  telegram. com.tdesktop.Telegram is a STALE ORPHAN on Chip's machine
+  (soft-delete ages it out). OPUS ITEM CLOSED -- the prior session's "park for
+  Opus design" was based on inference not verification. Verification resolved it.
 
-PHASE 1 (LOCKED, Sonnet-implementable against phase1-identity-spec.md), five parts:
-1. MAS gates derivation. source=mas apps excluded from name-derived matching
-   entirely; their label/cask forced NULL by derivation. Dissolves Canva +
-   Telegram MAS halves. (Was: source=mas only hid the patch button.)
-2. Collision detector. After name matching, any cask/label held by 2+ DISTINCT
-   non-curated bundle IDs is written to NEITHER; both drop to unresolved + onto
-   identity_conflicts. Keys on TOKEN not NAME. curated=true rows immune.
-3. identity_conflicts table (see DB schema section). The curation worklist.
-4. Curated seed rows: CE -> pycharm-ce/NULL label; Pro confirmed; Teams two rows;
-   Canva direct -> canva. Casks marked "(verify)" stay NULL until confirmed
-   against formulae.brew.sh + the fragment. A wrong curated row is worse than a
-   NULL.
-5. Patch-path identity guard. POST /patch (and branch/bushel/orchard) refuses to
-   run a label not trusted for the installed bundle_id (trusted = from a
-   curated=true row, OR present on the app_identity row AND not unresolved in
-   identity_conflicts). Belt-and-suspenders for an app-destroying irreversible
-   op. KEPT by decision.
+PHASE 1 -- ALL 5 PARTS SHIPPED. Commits:
+- Relay 1 (MAS gate + identity_conflicts migration): server a3abd19, f4a2011;
+  agent 993a8d0
+- Relay 2 (collision detector + identity_conflicts recording): server 6e84fa9
+- Relay 3 (curated seed rows + conflict resolution): included in server deploy
+- Relay 4 (patch-path identity guard): server 24940fb
+- Follow-up (checkin curated override + db.js startup sync): server 59264c2
+- Frontend (version hero "Up to Date with Vendor" in wrong state): 6bb00fe
 
-LOCKED DECISIONS (Jude, June 26): ship Phase 1 with NULLs where casks unverified
-(fill as verification lands); keep the Part 5 patch guard; native Telegram
-(ru.keepcoder.Telegram source=user) stays label-NULL/unpatchable, parked for the
-Opus multi-variant Telegram design -- intentional loose end.
+Part 0 -- identity_conflicts table + MAS cleanup:
+  identity_conflicts created in db.js startup. Startup also runs idempotent
+  UPDATE to null label/cask on any non-curated MAS app_identity rows.
+  Unique index on (bundle_id, source, token) makes inserts idempotent.
+
+Part 1 -- MAS gates derivation (5 POINTS, not 3 -- spec gap found during relay 1):
+  source=mas apps excluded from name-derived matching. Five gate points:
+  1. orchardpatch-agent catalog.js: enrichAppsWithLabels skips source='mas'
+  2. orchardpatch-server server.js /checkin: filter excludes source='mas'
+  3. orchardpatch-server identity-bootstrap.js: WHERE clause excludes source='mas'
+  4. orchardpatch-server homebrew.js: NOT EXISTS guard on UPDATE prevents
+     the Homebrew resolver re-populating MAS rows 30s after startup (this was
+     the spec gap -- "rely on upstream gates" didn't account for the resolver's
+     UPDATE running after the startup cleanup had already nulled the rows).
+  5. orchardpatch-server db.js startup: idempotent MAS cleanup UPDATE on deploy.
+  NOTE: Jude's agent (device-GJM7N0XGL0) still runs old catalog.js without gate 1.
+  The server-side gates (2-5) correctly override any stale agent-reported labels.
+  Update Jude's agent at next natural deploy opportunity.
+
+Part 2 -- Collision detector (src/lib/identity-collision-detector.js):
+  detectAndRefuseCollisions(column) runs for homebrew_cask and installomator_label.
+  Any token held by 2+ distinct non-curated bundle IDs is NULLed in app_identity
+  and recorded in identity_conflicts. Keys on TOKEN not NAME. curated=true immune.
+  Called from: resolver-cron.js (post-resolver), identity-bootstrap.js (post-
+  bootstrap), /checkin handler (post-write).
+
+Part 3 -- identity_conflicts table (see DB schema section):
+  10 rows recorded, 9 resolved=true, 1 false (com.tdesktop.Telegram orphan,
+  intentional -- soft-delete ages it out and the conflict auto-resolution pass
+  will mark it resolved automatically).
+
+Part 4 -- Curated seed rows (in db.js startup, idempotent ON CONFLICT):
+  6 rows, all curated=true:
+  | Bundle ID                | Label                     | Cask            |
+  | com.jetbrains.pycharm    | jetbrainspycharm          | pycharm         |
+  | com.jetbrains.pycharm.ce | NULL                      | pycharm-ce      |
+  | com.microsoft.teams      | microsoftteams            | NULL            |
+  | com.microsoft.teams2     | microsoftteams-rollingout | microsoft-teams |
+  | com.canva.CanvaDesktop   | canva                     | canva           |
+  | ru.keepcoder.Telegram    | telegram                  | telegram        |
+  CORRECTIONS from verification vs Opus session conclusions:
+  - Teams classic has NO Homebrew cask. microsoft-teams cask installs New Teams.
+  - ru.keepcoder.Telegram is correctly mapped to telegram (confirmed, not inferred).
+  NOT seeded: com.canva.canvaeditor (MAS-gated), com.tdesktop.Telegram (orphan).
+
+Part 5 -- Patch-path identity guard (src/lib/identity-trust.js):
+  isIdentityTrusted(bundleId, label): checks app_identity for (bundle_id, label),
+  then identity_conflicts for unresolved entries. Returns { trusted, reason }.
+  Wired into: POST /patch (Fruit, hard refusal when bundleId present), /bushel
+  (hard refusal), /branch and /orchard (per-app skip -- batch ops skip untrusted
+  apps, don't abort). Branch/Bushel/Orchard handlers now select a.bundle_id.
+  GAP: Catalog deploys (label-only path, no bundleId) skip isIdentityTrusted().
+  Partially addressed by label-level conflict check in the else branch -- see
+  Catalog identity guard section below.
+
+Checkin curated override (commit 59264c2):
+  /checkin handler now looks up app_identity for a curated=true row before writing
+  installomator_label to apps table. Curated label (may be NULL) overrides the
+  agent-reported value. db.js startup also syncs existing apps rows to curated
+  identity via UPDATE on every deploy. Together these mean Jude's old agent can
+  keep sending jetbrainspycharm for CE and the server silently overrides with NULL.
+
+Version hero state fix (frontend 6bb00fe):
+  "Up to Date with the Vendor" was rendering inside the patchable block (next to
+  the Patch button), producing contradictory UI. Now exclusively inside the
+  current state block. One occurrence in codebase.
+
+PHASE 1 DONE CRITERIA (all met as of June 26):
+  - source=mas apps cannot hold a derived label or cask
+  - No homebrew_cask or installomator_label held by 2+ distinct non-curated
+    bundle IDs (both collision queries return 0 rows -- verified)
+  - identity_conflicts table exists and records refusals (10 rows)
+  - 6 curated rows in place (curated rows 6, resolved conflicts 9,
+    unresolved non-orphan 0 -- verified)
+  - Patch against untrusted/ambiguous identity refused at server
+  - PyCharm Pro: unchanged and correct
+  - Teams: did NOT trip the detector (token not name) -- validates detector design
+  UI verification: PyCharm CE is not installed on Jude's machine. Server-layer
+  correctness confirmed via direct queries. UI verification deferred until CE
+  is naturally present on a fleet device.
 
 GENERAL MODEL REMAINS OPUS: Phase 1 fixes the 4 known families. How derivation
 distinguishes variants in general, how curated rows cover the tail, and how the
@@ -711,8 +780,9 @@ collision detector hands us the worklist automatically. (See Competitive section
 - Works in BeyondTrust / privilege management environments
 - No sudo required -- LaunchDaemon runs as root
 - No MDM conflicts -- agent pattern same as Jamf/Mosyle/Kandji
-- Installomator is the only patch mechanism (1,137 supported labels as of
-  June 12 catalog sync)
+- Installomator is the only patch mechanism (1,137 label rows as of June 12
+  catalog sync -- NOTE: this count includes phantom case aliases from the catalog-
+  sync parser bug; real deployable label count is lower. See open items.)
 - Single-tenant for now -- multi-tenancy is a prerequisite for Cultivation
 - Installomator fragments now at fragments/labels/ (not Labels/) in repo
 
@@ -918,6 +988,13 @@ not hardcoded in logic. Future sources slot in naturally.
   [0-9] not \d, \\1 not \1, \\s \\( \\) \\. not \s \( \) \. Same failure class
   as the Python-heredoc hazard. ALWAYS verify the regex with a direct query
   against real data, never by eyeballing the source.
+- Standing rule (NEW June 26): SQL strings embedded in JS that contain literal
+  string values must use escaped inner quotes or a different outer delimiter.
+  Single quotes inside single-quoted JS strings terminate the string silently
+  (no parse-time error, just a SyntaxError at module load). Pattern: outer
+  single quotes with inner \'value\', or use double quotes as outer delimiter.
+  Confirmed crash: catalog-sync.js had WHERE source = 'installomator_label'
+  inside a single-quoted string -- Railway crash-looped until fixed (27d8b00).
 - Standing rule (NEW June 26): when a fix does not take, run a diagnostic query
   against runtime data BEFORE writing the next fix. The zoom.us bug hid under
   four commits because each fix looked correct in source while runtime was
@@ -976,20 +1053,24 @@ not hardcoded in logic. Future sources slot in naturally.
   Phase C agent deployed June 23 (inventory.js reads SUFeedURL from Info.plist,
   sends as sparkleFeedUrl in check-in payload). Fast loop confirmed.
   version-checker rewrite live. GITHUB_TOKEN sourced from config.json on both.
+  Phase 1 agent (catalog.js MAS gate): deployed to Chip's machine (993a8d0).
+  Jude's machine still running pre-Phase-1 catalog.js -- server-side curated
+  override handles stale label reports. Update at next natural deploy.
 - Known MAS apps on Jude's machine: ASUS Device Discovery, Bitwarden, Canva,
   Darkroom, DaVinci Resolve, Developer, Slack, Telegram, Trello, Word (10)
   NOTE: Slack and Telegram on Jude's machine are MAS -- Patch button hidden.
   Slack on Chip's machine is direct download -- Patch button shown.
   DaVinci Resolve is MAS on Jude's machine; may be direct download on others.
 - Known outdated apps on device-C02D52QTML85: Ollama (large, avoid as test
-  target), Slack (in active use, avoid), Telegram (label mismatch, see below)
+  target), Slack (in active use, avoid), Telegram (curated to telegram label)
 - Fleet apps confirmed installed (June 26 diagnostics):
   - 1Password: bundle com.1password.1password, label 1password8, BOTH devices
     at 8.12.22. See 1Password staged-rollout note in Open items.
   - PyCharm (Pro): bundle com.jetbrains.pycharm, label jetbrainspycharm,
     Jude's machine, 2026.1.3, current.
-  - PyCharm CE: bundle com.jetbrains.pycharm.ce, ALSO label jetbrainspycharm,
-    Jude's machine, 2025.2.3. Identity collision -- see Open items.
+  - PyCharm CE: bundle com.jetbrains.pycharm.ce, NOT installed on Jude's
+    machine (only PyCharm.app/Pro at ~/Applications). Stale DB row ages out
+    with soft-delete. Phase 1: curated to label NULL, cask pycharm-ce.
   - zoom.us: bundle us.zoom.xos, label zoom, both devices 7.1.0 (83064),
     patchable 7.1.0.83064. Now correctly Current after June 26 fix.
 
@@ -1065,15 +1146,24 @@ not hardcoded in logic. Future sources slot in naturally.
 - identity_conflicts: id SERIAL PK, bundle_id TEXT, source TEXT
   ('homebrew_cask' | 'installomator_label'), token TEXT (the contested
   cask/label), competing_bundle_ids TEXT[], detected_at TIMESTAMPTZ DEFAULT
-  now(), resolved BOOLEAN DEFAULT false -- NEW (designed June 26, Phase 1, not
-  yet shipped). When the collision detector refuses a token (claimed by 2+
-  distinct non-curated bundle IDs), it inserts one row per affected bundle_id.
+  now(), resolved BOOLEAN DEFAULT false -- SHIPPED June 26 (Phase 1). When
+  the collision detector refuses a token (claimed by 2+ distinct non-curated
+  bundle IDs), it inserts one row per affected bundle_id.
+  Current state: 10 rows, 9 resolved=true, 1 false (com.tdesktop.Telegram
+  orphan -- intentional, ages out with soft-delete + conflict auto-resolution).
+  Unique index on (bundle_id, source, token) -- idempotent inserts.
   This IS the curation worklist + debug surface. It does NOT gate anything by
   itself -- the gating already happened when the token was nulled. Ambiguity
   attaches to a (bundle_id, source) PAIR, not the whole identity row, which is
   why it lives in its own table rather than as a boolean on app_identity (CE's
   Homebrew mapping can be ambiguous while a future intrinsic Sparkle signal stays
-  valid). resolved flips true when a curated row supersedes it.
+  valid). resolved flips true when a curated row supersedes it OR when the
+  conflict auto-resolution pass confirms the token is no longer contested.
+  CRITICAL: the collision detector currently only asserts conflicts, never clears
+  them. The conflict auto-resolution pass (part of soft-delete design) must run
+  after each detector pass and mark resolved=true for any token no longer
+  contested in app_identity. Without this, the Telegram deploy button stays
+  blocked permanently after the orphan ages out.
 - patch_jobs: id, device_id, app_name, label, mode, method, status,
   created_at, started_at, completed_at, exit_code, error, log
   method values: 'fruit', 'branch', 'bushel', 'orchard'
@@ -1084,8 +1174,10 @@ not hardcoded in logic. Future sources slot in naturally.
   "abandoned: ..." error string. Promote to first-class status only if data
   shows it's frequent.
   initiated_by: nullable, always null until real auth exists
-  Known exit codes in DB: 0 (success), 23 (MAS), 16 (download error),
-  11 (checksum mismatch), null (queued/cancelled -- never ran).
+  Known exit codes in DB: 0 (success), 8 (app name mismatch -- Installomator
+  installed something but couldn't find the expected app name; surfaced by
+  running jetbrainspycharmce which is a phantom alias), 11 (checksum mismatch),
+  16 (download error), 23 (MAS), null (queued/cancelled -- never ran).
   NOTE (June 26): exit 0 with "No new version to install" in the log is a
   distinct outcome from a true update. The status derivation does NOT currently
   consult this. The proposed patch-outcome-aware state feature (Open items)
@@ -1111,6 +1203,10 @@ not hardcoded in logic. Future sources slot in naturally.
   sparkleFeedUrl as of Phase C). Phase A: also upserts bundle_id+label pairs
   into app_identity. Phase C: guard broadened to include apps with sparkleFeedUrl
   but no installomatorLabel; sparkle_feed_url written to app_identity.
+  Phase 1 (commit 59264c2): before writing installomator_label to apps table,
+  looks up app_identity for a curated=true row for that bundle_id. If found,
+  uses the curated label (even if NULL) instead of the agent-reported value.
+  Collision detector (runCollisionDetector()) called post-write.
 - GET /devices -- fleet list with outdated_count (latest_versions join).
   June 26: outdated_count now applies the 3-layer normalization and excludes
   system/mas apps.
@@ -1131,6 +1227,9 @@ not hardcoded in logic. Future sources slot in naturally.
   NOTE (Phase 6): silent mode withholds pending_patches for 15s undo window.
   Required body: deviceId, label, appName. Optional: bundleId, mode.
   Response: { ok, id, deviceId, label, appName, createdAt }.
+  Phase 1: if bundleId provided, isIdentityTrusted() check fires before write
+  (403 if untrusted). If no bundleId (catalog deploy path): label-level conflict
+  check against identity_conflicts fires instead (403 if unresolved conflict).
 - POST /patch-jobs/branch -- queue Branch
 - POST /patch-jobs/bushel -- queue Bushel
 - POST /patch-jobs/orchard -- queue Orchard
@@ -1142,7 +1241,10 @@ not hardcoded in logic. Future sources slot in naturally.
 - GET /api/version-sync and /api/version-sync/:label -- cache lookups
 - POST /api/catalog-sync -- sync Installomator catalog from GitHub. Phase A:
   also extracts download_url from fragments and triggers bootstrapIdentity.
-- GET /api/catalog -- browse catalog, ?search= supported, pagination
+- GET /api/catalog -- browse catalog, ?search= supported, pagination.
+  Phase 1 / catalog guard: now includes has_conflict boolean per row via LEFT
+  JOIN on identity_conflicts (source='installomator_label', resolved=false).
+  Current live effect: telegram label has_conflict=true (orphan conflict).
 - GET /pending-commands?device_id= -- agent polls for unclaimed commands
 - POST /pending-commands/:id/claim -- conditional claim, returns 409 if lost
 - POST /pending-commands/:id/complete -- persists result, always 200 (idempotent)
@@ -1172,6 +1274,41 @@ NOTE (Phase 6): mode-based deferred-enqueue policy (silent = 15s window) lives
 in the server POST /patch handler. The proxy passes mode through as-is.
 
 ## Feature status
+
+### Phase 1 multi-variant identity fix -- SHIPPED June 26, 2026
+All 5 parts across 4 relays + 2 follow-up fixes. See Multi-variant identity
+section above for full detail. Commits: a3abd19, f4a2011 (server relay 1),
+993a8d0 (agent relay 1), 6e84fa9 (relay 2), relay 3 (curated rows in db.js),
+24940fb (relay 4 patch guard), 59264c2 (checkin curated override),
+6bb00fe (frontend version hero state fix).
+
+### Catalog deploy identity guard -- SHIPPED June 26, 2026
+Problem: Catalog deploys go through POST /api/patch with label only, no bundleId.
+The phantom label jetbrainspycharmce was deployable from the Catalog and crashed
+with exit 8 ("Unable to find application named 'PyCharm CE.app'") because it is
+a case alias routing to Pro's install logic.
+
+Server (commit 9ee2670):
+- Label-level conflict check in the else branch of POST /patch (catalog path):
+  queries identity_conflicts for unresolved rows where token=label and
+  source='installomator_label'. Returns 403 if any found.
+- has_conflict boolean added to GET /api/catalog via LEFT JOIN on
+  identity_conflicts. CRASH: inner 'installomator_label' single quotes inside
+  outer single-quoted JS string terminated the string early, crash-looping
+  Railway. Fixed by escaping inner quotes with \' (commit 27d8b00).
+
+Frontend (commit 1096270):
+- Deploy button disabled when has_conflict=true: opacity 0.4, cursor not-allowed,
+  pointerEvents none, title tooltip explaining the block.
+
+Live side effect: telegram label shows has_conflict=true (com.tdesktop.Telegram
+orphan is the unresolved conflict). Deploy button disabled for telegram. CORRECT
+behavior -- clears automatically when soft-delete ships and the conflict
+auto-resolution pass marks the row resolved=true.
+
+REMAINING GAP: isIdentityTrusted() requires bundleId. Catalog deploys have none.
+Label-level conflict check is the safety net for the catalog path. Full fix:
+look up bundle_id by label from app_identity before queuing. Filed as open item.
 
 ### Branch-patch fallout + version-sourcing session -- June 26, 2026
 Started from a Branch patch producing inconsistencies, ended with the zoom.us
@@ -1352,36 +1489,42 @@ Sidebar.tsx (ThemeToggle in footer).
   History, Branch/Bushel/Orchard modals, cancel buttons, auth wall.
 
 ### Not yet built (priority order)
-0a. **Phase 1 multi-variant identity fix (Sonnet, against phase1-identity-spec.md).**
-   IMMEDIATE NEXT IMPLEMENTATION WORK. Gated only on the chip-phase1-verification
-   relay returning. Fixes the app-DESTRUCTIVE PyCharm CE bug (CE patch installs
-   Pro over Community). Sequence: migration (identity_conflicts) -> MAS gate ->
-   collision detector -> curated rows -> patch guard. Verify after each part.
-0b. **Soft-delete app lifecycle (Sonnet, LOCKED design in apps-table schema note).**
-   Ship the last_seen column + upsert clause EARLY (cheap, starts accumulating
-   history immediately, every day waited loses removal events). Derivation + UI
-   follow. Plus the directory-loop logging fix (rides along).
+0. **Soft-delete app lifecycle (Sonnet, LOCKED design in apps-table schema note).**
+   IMMEDIATE NEXT IMPLEMENTATION WORK. Ship last_seen column + upsert clause
+   EARLY (cheap, starts accumulating history immediately; every day waited loses
+   removal events). Derivation + UI follow. Directory-loop logging rides along.
+   CRITICAL DEPENDENCY: must include conflict auto-resolution pass in the
+   collision detector. After each detector run, check all unresolved
+   identity_conflicts rows and mark resolved=true for any token no longer
+   contested in app_identity. Without this, the Telegram deploy button stays
+   blocked permanently after the orphan ages out. Build this INTO the soft-delete
+   relay, not as a follow-up.
 1. Demo video + polished repo. Lagging state is the demo differentiator --
    feature it prominently. Also show clickable dashboard, resolver states
    across different apps, the Patch by the Orchard flow. zoom.us is now a clean
    Current example. AVOID patching 1Password live (rollout lag).
 2. Outreach (MacAdmins Slack + contribution-first Installomator maintainer
    contact). coconutBattery HTML response is the confirmed bug report opener.
-   Framing assets from June 26: "Installomator compares for difference not
-   direction, we add the directional lagging comparison" and "curation is the
-   design, same as Jamf."
+   Framing assets: "Installomator compares for difference not direction, we add
+   the directional lagging comparison" and "curation is the design, same as Jamf."
 -- Then the backlog below, still valid, lower priority --
 3. "Version Conflicts" cleanup on App Inventory (Sonnet): remove stale card,
    fix resolver conflict-comparison normalization. VERIFY with a query. NOTE: this
    does NOT touch variant collisions (different layer -- see identity_conflicts).
-4. Multi-variant identity GENERAL model (Opus): Phase 1 handles the 4 known
+4. Catalog-sync case-alias parser fix (Sonnet): skip alias-only case entries,
+   remove phantom labels from app_catalog, fix inflated label count. Confirmed
+   with real failure: jetbrainspycharmce deployed from Catalog produced exit 8.
+5. Catalog deploy bundleId guard (Sonnet): look up bundle_id by label from
+   app_identity before queuing, enabling full isIdentityTrusted() check on
+   the catalog path (not just the label-level conflict check).
+6. Multi-variant identity GENERAL model (Opus): Phase 1 handles the 4 known
    families; the general derivation/curation/multi-tenancy model remains Opus.
-   Includes native Telegram (keepcoder source=user) and multi-source precedence
-   (parked, with the available-pipeline-only hard constraint).
-5. Patch-outcome-aware state (Opus): surface "no new version at patch time"
+   Includes DaVinci MAS/free and multi-source precedence (parked, with the
+   available-pipeline-only hard constraint). Telegram Opus item CLOSED.
+7. Patch-outcome-aware state (Opus): surface "no new version at patch time"
    without collapsing the lagging differentiator. Persist patch-attempt outcome
    where status derivation can read it.
-6. Phase E -- server-side patchable resolution (Opus): retire the per-agent
+8. Phase E -- server-side patchable resolution (Opus): retire the per-agent
    early-kill scrape; resolve patchable by reading label version sources
    server-side. Perfect-world target captured above. MUST honor each label's
    versionKey (see Version normalization). PREP TASK: produce
@@ -1392,38 +1535,51 @@ Sidebar.tsx (ThemeToggle in footer).
    in the context that uses it. Reading pass: valuesfromarguments, full
    label-variable list incl. arch splits, the assemble process. Same treatment
    for a Title Editor teardown (competitive).
-7. Phase 7: Force reinstall in catalog modal (UNINSTALL=1).
-8. Installomator version + Update button on device detail.
-9. Agent update mechanism -- pkg build pipeline. PRE-LAUNCH GATE. Opus Deep
+9. Phase 7: Force reinstall in catalog modal (UNINSTALL=1).
+10. Installomator version + Update button on device detail.
+11. Agent update mechanism -- pkg build pipeline. PRE-LAUNCH GATE. Opus Deep
    Dive (pkg pipeline vs server-pushed self-update).
-10. Agent token rotation product feature.
-11. method='fruit' hardcode cleanup in POST /patch-jobs.
-12. Bushel modal pre-count cosmetic fix.
-13. MAS app exclusion from Branch/Bushel/Orchard queues.
-14. "Clear by status" bulk action in Patch History.
-15. Pinned Apps on Dashboard (needs preferences table).
-16. Automated catalog-sync schedule.
-17. Cultivation / policy-based auto-remediation.
-18. Multi-tenancy. PREREQUISITE for mutating pending_commands.
-19. SSO / proper auth. PREREQUISITE for mutating pending_commands.
-20. Graph reports, CLI/Homebrew tap, mas CLI integration.
-21. Title case audit on Patch History, Catalog, Devices list, Settings pages.
-22. GET /stats migration to canonical patch-status source.
+12. Agent token rotation product feature.
+13. method='fruit' hardcode cleanup in POST /patch-jobs.
+14. Bushel modal pre-count cosmetic fix.
+15. MAS app exclusion from Branch/Bushel/Orchard queues.
+16. "Clear by status" bulk action in Patch History.
+17. Pinned Apps on Dashboard (needs preferences table).
+18. Automated catalog-sync schedule.
+19. Cultivation / policy-based auto-remediation.
+20. Multi-tenancy. PREREQUISITE for mutating pending_commands.
+21. SSO / proper auth. PREREQUISITE for mutating pending_commands.
+22. Graph reports, CLI/Homebrew tap, mas CLI integration.
+23. Title case audit on Patch History, Catalog, Devices list, Settings pages.
+24. GET /stats migration to canonical patch-status source.
 
 ## Open items / tech debt
-- **PyCharm CE multi-variant identity collision (Opus).** Resolver matched
-  com.jetbrains.pycharm AND com.jetbrains.pycharm.ce to the same pycharm cask.
-  CE told its latest is 2026.1.3 (Pro) when CE's real latest is 2025.2.5 via
-  pycharm-ce. jetbrainspycharm label points at Pro, so patching CE with it
-  installs Pro over Community. Multi-variant identity problem -- same class as
-  Telegram MAS/Desktop and DaVinci Resolve MAS/free. Matcher must never resolve
-  two distinct bundle IDs to one cask unless correct.
+- **Conflict auto-resolution gap (Sonnet, rides with soft-delete).** The
+  collision detector nulls and records but never clears. When soft-delete removes
+  an orphan from app_identity, the detector must also mark identity_conflicts
+  resolved=true for any token no longer contested. Without this the Telegram
+  deploy button stays permanently blocked after the orphan ages out. Must be
+  built into the soft-delete relay, not deferred.
+- **Catalog-sync case-alias artifact (Sonnet, CONFIRMED with real failure).**
+  catalog-sync treats case aliases inside a fragment (e.g. jetbrainspycharmce
+  inside jetbrainspycharm.sh) as distinct deployable labels. Deploying
+  jetbrainspycharmce from the Catalog produced exit 8 ("Unable to find
+  application named 'PyCharm CE.app'"). The alias routes to Pro's install logic,
+  which installs PyCharm.app not PyCharm CE.app. Inflates catalog count (1,137
+  includes phantom aliases). Fix: parser must not emit alias-only entries.
+- **Catalog deploy bundleId gap (Sonnet).** Catalog deploys are label-only;
+  isIdentityTrusted() requires bundleId. Label-level conflict check is the
+  current safety net. Full fix: look up bundle_id by label from app_identity
+  before queuing, enabling the full guard on the catalog path.
+- **Jude's agent old version (low urgency).** device-GJM7N0XGL0 runs old
+  catalog.js without the MAS gate (catalog.js gate, relay 1). Server-side
+  gates handle it correctly. Update at next natural deploy opportunity.
 - **Resolver conflict count inflated + stale card (Sonnet).** "13 Version
   Conflicts" on App Inventory: (a) the stale card should have been removed in
   the canonical-counts work and wasn't; (b) the resolver conflict comparison in
   resolver-cron.js doesn't normalize before comparing, flagging format-only
   differences. Fix both. Verify with a direct query.
-- **Patch-outcome-aware state (Opus, new feature).** See Not-yet-built #5.
+- **Patch-outcome-aware state (Opus, new feature).** See Not-yet-built #7.
   Must not collapse into the lagging state. Needs patch-attempt outcome
   persisted where status derivation can read it (patch_jobs has the log but the
   status query doesn't consult it).
@@ -1455,18 +1611,9 @@ Sidebar.tsx (ThemeToggle in footer).
 - method='fruit' hardcode in POST /patch-jobs INSERT VALUES. Safe but dirty.
 - DB indexes: none on fleet queries or pending_commands. Fine at 2 devices.
 - agent_url column: unused, reserved for future server-initiated flows.
-- Telegram label mismatch: Jude's machine MAS Telegram (handled). Chip's machine
-  Telegram Desktop (direct download). Label mismatch unresolved for Chip's
-  machine. Deferred to resolver / multi-variant identity work.
 - Last-known-good version held forever: staleness policy deferred to resolver.
 - GITHUB_TOKEN scoped to all public repos -- tighten to Installomator repo at
   next rotation (renewed May 12, 2026).
-- **Catalog-sync case-alias artifact (Sonnet).** catalog-sync treats case aliases
-  inside a fragment (e.g. jetbrainspycharmce inside jetbrainspycharm.sh) as
-  distinct labels, creating phantom app_catalog rows. Inflates catalog count and
-  can seed phantom labels into identity derivation. Confirmed for PyCharm; likely
-  every multi-alias fragment. Audit + fix the parser to not emit alias-only
-  entries as standalone labels.
 - **Double enrichAppsWithLabels() (Sonnet, trivial).** Called twice per check-in
   (once in scheduler.js before checkinToServer, once inside checkinToServer).
   Harmless if idempotent (wasted work), latent bug if not. Dedupe to one call.
@@ -1482,22 +1629,22 @@ Sidebar.tsx (ThemeToggle in footer).
   construction and kill the lagging state (the differentiator). Multi-tenancy-
   tier feature; rides with the curated-corpus multi-tenancy decision. (Raised by
   Jude June 26; reframed to preserve the two-number model.)
-- **Native Telegram (Opus, PARKED).** ru.keepcoder.Telegram as source=user on
-  Chip's machine: the App Store bundle ID on a non-MAS install. No Installomator
-  label safely targets it. Stays label-NULL/unpatchable until the multi-variant
-  Telegram question is designed. Part of the general multi-variant identity model.
 - **Multi-variant identity general model (Opus).** Phase 1 fixes the 4 known
   families. The general derivation/curation/multi-tenancy model remains an Opus
-  Deep Dive. Same class: PyCharm Pro/CE, Teams classic/new, Canva MAS/direct,
-  Telegram MAS/Desktop/native, DaVinci MAS/free.
+  Deep Dive. Same class: DaVinci MAS/free. Telegram Opus item CLOSED (curated
+  to telegram label via primary-source verification).
 
 ## Known label-matching issues
 - coconutBattery: label scrapes coconut-flavour.com, gets HTML back. Upstream
   Installomator bug. Maintainer outreach opener. NOTE: now resolves via Homebrew
   (latest_available = 4.3.3). Patchable pipeline still broken; available works.
-- Telegram: MAS on Jude's machine (handled). Direct download on Chip's machine
-  -- label mismatch still unresolved for device-C02D52QTML85.
-- PyCharm CE: matched to wrong (Pro) cask. See Open items.
+- Telegram: ru.keepcoder.Telegram correctly curated to telegram label (Phase 1).
+  com.tdesktop.Telegram is a stale orphan on Chip's machine -- ages out with
+  soft-delete. Telegram Catalog deploy blocked (has_conflict=true) until then.
+- PyCharm CE: correctly NULLed label, pycharm-ce cask (Phase 1 curated row).
+  NOT currently installed on Jude's machine. Stale DB row ages out with
+  soft-delete. jetbrainspycharmce phantom alias still in app_catalog (catalog-
+  sync parser bug, separate fix).
 - DaVinci Resolve: MAS on Jude's machine. May be direct download elsewhere.
   Different distributions of same app.
 - firefoxpkg: verify patches standard Firefox not ESR.
@@ -1505,34 +1652,23 @@ Sidebar.tsx (ThemeToggle in footer).
   rejects to null. Version normalization deferred to resolver redesign.
 
 ## Next session priority order
-0. **Relay chip-phase1-verification.md to Chip** (verification only, read-only).
-   Get ~/Desktop/phase1-verification.txt back. It confirms matcher paths see
-   source, the curated casks/labels, baseline collision state, and patch-handler
-   bundle_id scope. Fill the spec's "(verify)" NULLs from it.
-1. **Implement Phase 1 identity fix (Sonnet)** against phase1-identity-spec.md,
-   in spec sequence: migration -> MAS gate -> detector -> curated rows -> patch
-   guard. Verify after each part with the Part 2 detection queries. This is the
-   app-DESTRUCTIVE bug; it leads.
-2. **Ship soft-delete column + upsert clause (Sonnet)** early. Derivation + UI
-   follow. Directory-loop logging rides along.
-3. Smaller filed bugs as capacity allows: catalog case-alias artifact, double
-   enrichAppsWithLabels. SERIALIZE -- do not run these in parallel with Phase 1.
-4. Demo video. The lagging state is the centerpiece. Also show the clickable
-   dashboard (metric cards -> filtered App Inventory), resolver states on
-   different apps, and the Patch by the Orchard flow. zoom.us is a clean Current
-   example now. AVOID patching 1Password live (vendor rollout lag).
-5. Polished repo. README with screenshots. Design reference files already
-   committed in design-reference/.
-6. Outreach. MacAdmins Slack first, then contribution-first Installomator
+0. **Soft-delete: last_seen column + upsert clause (Sonnet).** Ship early.
+   MUST include the conflict auto-resolution pass in the collision detector
+   (marks identity_conflicts.resolved=true when token no longer contested).
+   Derivation predicate + UI follow. Directory-loop logging rides along.
+1. Demo video. Lagging state is the centerpiece. Also show clickable dashboard,
+   resolver states on different apps, and the Patch by the Orchard flow.
+   zoom.us is a clean Current example. AVOID patching 1Password live (vendor
+   rollout lag).
+2. Polished repo. README with screenshots. Design reference files committed.
+3. Outreach. MacAdmins Slack first, then contribution-first Installomator
    maintainer contact.
 
-Backlog routing decided June 26:
-- Sonnet: Phase 1 implementation (locked spec), soft-delete, catalog case-alias,
-  double enrichAppsWithLabels, Version Conflicts cleanup (remove stale card + fix
-  conflict normalization).
-- Opus: multi-variant identity GENERAL model, native Telegram, multi-source
-  precedence (parked), Phase E patchable resolver (+ installomator-reference.md
-  prep), patch-outcome state.
+Backlog routing:
+- Sonnet: soft-delete (+ conflict auto-resolution pass), catalog case-alias,
+  catalog bundleId guard, double enrichAppsWithLabels, Version Conflicts cleanup.
+- Opus: multi-variant identity GENERAL model, Phase E patchable resolver
+  (+ installomator-reference.md prep), patch-outcome state, agent update mechanism.
 
 ## Waitlist page (orchardpatch-waitlist repo)
 
@@ -1584,6 +1720,45 @@ console entirely. Marketing/waitlist keeps its existing greens (#2d6e1f text,
 The token system carries this: primitives only hold raw hex; semantic tokens
 expose --accent / --sidebar-accent; components reference semantic only. A
 palette change is a one-line primitive edit.
+
+## Lessons learned (June 26, 2026 -- Phase 1 implementation session, Sonnet)
+- Verification found a 5th MAS gate the spec missed. The Homebrew resolver's
+  UPDATE runs 30s after startup and re-populated MAS rows after the startup
+  cleanup had nulled them. "Rely on upstream gates" was wrong. Always verify the
+  full write surface for any database invariant you're holding -- every UPDATE
+  that touches the relevant column is a gate point.
+- A wrong inference in Opus is still an inference. The Opus session concluded
+  ru.keepcoder.Telegram should be parked pending an Opus design. Chip's
+  verification confirmed via primary sources (fragment downloadURL,
+  expectedTeamID, Homebrew cask quit identifier) that the telegram label is
+  correct for that bundle ID. The condition ("don't point it at the label without
+  confirming it targets that bundle ID") was fulfilled by verification. Opus was
+  appropriately cautious; verification was the right gate. Closed correctly.
+- Context compaction mid-relay loses verification state but not code changes.
+  Recovery: send the verification queries directly, asking Chip to continue
+  without re-implementing. The code was already pushed; Railway was deploying.
+  Adding credits resolved the compaction ceiling.
+- Single quotes inside single-quoted JS strings crash Node.js just as badly as
+  other string delimiter collisions. The catalog-sync SQL string used outer
+  single quotes; the inner 'installomator_label' value terminated the string
+  early. Server crash-looped until inner quotes were escaped with \'. See
+  standing rules.
+- Labels in the Catalog need identity validation before the Deploy button shows.
+  The phantom alias jetbrainspycharmce was deployable with a green Deploy button.
+  Clicking it sent a real Installomator job that failed at exit 8. Safety checks
+  must live at the server, not only at the UI. Both layers are needed.
+- Exit 8 from Installomator means the install ran but couldn't find the expected
+  app name. Distinct from exit 23 (MAS) or exit 16 (download). Useful for
+  diagnosing fragment vs install mismatch.
+- The curated override in the /checkin handler means Jude's old agent doesn't
+  need an immediate binary update. Server enforces correct identity regardless of
+  agent report. Server-side correctness is the primary layer; agent is additive.
+- The collision detector's auto-resolution pass is a missing piece. Detector
+  asserts conflicts but never clears them. Discovered because the Telegram deploy
+  button stayed blocked after Phase 1 (the orphan conflict is resolved=false).
+  Fixing this requires a companion pass: after each detector run, check if each
+  unresolved conflict's token is still contested; if not, mark resolved=true.
+  This must ride with soft-delete, not be deferred separately.
 
 ## Lessons learned (June 26, 2026 -- multi-variant identity, Opus session)
 - One bug was a class. "Fix PyCharm CE showing Pro's version" was a symptom of
