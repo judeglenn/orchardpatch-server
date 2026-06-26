@@ -23,6 +23,7 @@ async function bootstrapIdentity(pool) {
       AND bundle_id <> ''
       AND bundle_id NOT LIKE 'com.apple.%'
       AND installomator_label IS NOT NULL
+      AND source != 'mas'
     ORDER BY bundle_id, last_seen DESC
     ON CONFLICT (bundle_id) DO UPDATE SET
       app_name = EXCLUDED.app_name,

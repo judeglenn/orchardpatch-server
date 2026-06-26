@@ -173,7 +173,7 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
 
     // Identity upsert for apps with known Installomator labels or Sparkle feeds
     const identityApps = (apps || []).filter(a =>
-      a.bundleId && !a.bundleId.startsWith('com.apple.') && (a.installomatorLabel || a.sparkleFeedUrl)
+      a.bundleId && !a.bundleId.startsWith('com.apple.') && a.source !== 'mas' && (a.installomatorLabel || a.sparkleFeedUrl)
     );
     if (identityApps.length > 0) {
       await Promise.all(identityApps.map(a =>
