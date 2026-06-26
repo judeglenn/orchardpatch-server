@@ -203,6 +203,52 @@ async function migrate() {
       AND (ai.curated IS NULL OR ai.curated = false)
   `).catch((e) => { console.warn('[DB] MAS cleanup warning:', e.message); });
 
+  // Curated seed rows -- Phase 1 identity fix.
+  // ON CONFLICT only overwrites non-curated rows, so human edits are never lost.
+  const CURATED_CONFLICT = 
+    'ON CONFLICT (bundle_id) DO UPDATE SET ' +
+    'installomator_label = EXCLUDED.installomator_label, ' +
+    'homebrew_cask = EXCLUDED.homebrew_cask, ' +
+    'app_name = COALESCE(EXCLUDED.app_name, app_identity.app_name), ' +
+    'curated = true ' +
+    'WHERE (app_identity.curated IS NULL OR app_identity.curated = false)';
+
+  const curatedRows = [
+    // PyCharm Pro -- both tokens confirmed; protects Pro so CE stops sharing
+    { bundle_id: 'com.jetbrains.pycharm',    label: 'jetbrainspycharm',          cask: 'pycharm',         name: 'PyCharm' },
+    // PyCharm CE -- no valid Installomator label; cask pycharm-ce confirmed
+    { bundle_id: 'com.jetbrains.pycharm.ce', label: null,                         cask: 'pycharm-ce',      name: 'PyCharm CE' },
+    // Teams classic -- label only; no Homebrew cask exists for classic Teams
+    { bundle_id: 'com.microsoft.teams',      label: 'microsoftteams',             cask: null,              name: 'Microsoft Teams classic' },
+    // Teams new
+    { bundle_id: 'com.microsoft.teams2',     label: 'microsoftteams-rollingout',  cask: 'microsoft-teams', name: 'Microsoft Teams' },
+    // Canva direct download
+    { bundle_id: 'com.canva.CanvaDesktop',   label: 'canva',                      cask: 'canva',           name: 'Canva' },
+    // Telegram native macOS (telegram.org/dl/macos = ru.keepcoder per fragment + Homebrew cask)
+    { bundle_id: 'ru.keepcoder.Telegram',    label: 'telegram',                   cask: 'telegram',        name: 'Telegram' },
+  ];
+
+  for (const row of curatedRows) {
+    await pool.query(
+      'INSERT INTO app_identity (bundle_id, app_name, installomator_label, homebrew_cask, curated, last_derived) ' +
+      'VALUES ($1, $2, $3, $4, true, now()) ' +
+      CURATED_CONFLICT,
+      [row.bundle_id, row.name, row.label, row.cask]
+    ).catch((e) => { console.warn('[DB] curated seed warning:', row.bundle_id, e.message); });
+  }
+  console.log('[DB] Curated seed rows applied (' + curatedRows.length + ')');
+
+  // Mark identity_conflicts resolved for the 6 curated bundle IDs
+  await pool.query(
+    'UPDATE identity_conflicts SET resolved = true ' +
+    'WHERE bundle_id = ANY($1)',
+    [[
+      'com.jetbrains.pycharm', 'com.jetbrains.pycharm.ce',
+      'com.microsoft.teams', 'com.microsoft.teams2',
+      'com.canva.CanvaDesktop', 'ru.keepcoder.Telegram'
+    ]]
+  ).catch((e) => { console.warn('[DB] conflict resolution warning:', e.message); });
+
   console.log("[DB] Schema ready");
 }
 
