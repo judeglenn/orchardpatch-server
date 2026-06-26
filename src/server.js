@@ -217,13 +217,13 @@ app.get("/devices", apiRateLimit, authMiddleware, async (req, res) => {
                 regexp_replace(a.version, '\s*\([^)]*\)', '', 'g'),
                 ',.*', ''
               ),
-              '^(\d+\.\d+\.\d+)\..*$', '\1'
+              '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
             ) IS DISTINCT FROM regexp_replace(
               regexp_replace(
                 regexp_replace(lv.latest_version, '\s*\([^)]*\)', '', 'g'),
                 ',.*', ''
               ),
-              '^(\d+\.\d+\.\d+)\..*$', '\1'
+              '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
             )
           THEN a.bundle_id
         END) as outdated_count
@@ -282,14 +282,14 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
               regexp_replace(a.version, '\s*\([^)]*\)', '', 'g'),
               ',.*', ''
             ),
-            '^(\d+\.\d+\.\d+)\..*$', '\1'
+            '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
           ) =
           regexp_replace(
             regexp_replace(
               regexp_replace(lv.latest_version, '\s*\([^)]*\)', '', 'g'),
               ',.*', ''
             ),
-            '^(\d+\.\d+\.\d+)\..*$', '\1'
+            '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
           ) THEN 'current'
           ELSE 'outdated'
         END AS patch_status
