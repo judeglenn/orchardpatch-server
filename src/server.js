@@ -441,7 +441,7 @@ app.post("/patch-jobs/branch", apiRateLimit, authMiddleware, async (req, res) =>
   // Server-side check: only insert labels that are genuinely outdated on this device
   // Join apps -> latest_versions and compare installed vs latest version
   const validationResult = await pool.query(`
-    SELECT a.installomator_label AS label, a.name AS app_name, a.version AS installed_version
+    SELECT a.installomator_label AS label, a.name AS app_name, a.version AS installed_version, a.bundle_id
     FROM apps a
     JOIN latest_versions lv ON lv.label = a.installomator_label
     WHERE a.device_id = $1
@@ -458,12 +458,29 @@ app.post("/patch-jobs/branch", apiRateLimit, authMiddleware, async (req, res) =>
     return res.status(400).json({ error: "No provided labels are genuinely outdated on this device" });
   }
 
+  // Identity guard: pre-filter apps; skip untrusted (bundle_id, label) pairs
+  const { isIdentityTrusted } = require('./lib/identity-trust');
+  const branchSkipped = [];
+  const trustedApps = [];
+  for (const app of validatedApps) {
+    const trust = await isIdentityTrusted(app.bundle_id, app.label);
+    if (!trust.trusted) {
+      console.warn('[patch-guard] skipping branch item: ' + trust.reason);
+      branchSkipped.push({ appName: app.app_name, reason: trust.reason });
+    } else {
+      trustedApps.push(app);
+    }
+  }
+  if (trustedApps.length === 0) {
+    return res.status(403).json({ error: 'All apps were blocked by identity guard', skipped: branchSkipped });
+  }
+
   // Insert one row per validated label in a single transaction
   const client = await pool.connect();
   const jobIds = [];
   try {
     await client.query("BEGIN");
-    for (const app of validatedApps) {
+    for (const app of trustedApps) {
       const jobId = `branch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const now = new Date().toISOString();
       // Insert history record into patch_jobs
@@ -508,7 +525,7 @@ app.post("/patch-jobs/bushel", apiRateLimit, authMiddleware, async (req, res) =>
   // Query all devices where this app (by label) is outdated
   // Join apps -> latest_versions and compare installed vs latest version
   const devicesResult = await pool.query(`
-    SELECT DISTINCT a.device_id, a.name AS app_name, a.version AS installed_version, d.hostname
+    SELECT DISTINCT a.device_id, a.name AS app_name, a.version AS installed_version, d.hostname, a.bundle_id
     FROM apps a
     JOIN latest_versions lv ON lv.label = a.installomator_label
     JOIN devices d ON d.id = a.device_id
@@ -524,6 +541,13 @@ app.post("/patch-jobs/bushel", apiRateLimit, authMiddleware, async (req, res) =>
 
   if (outdatedDevices.length === 0) {
     return res.status(400).json({ error: `No devices have outdated versions of label \"${label}\"` });
+  }
+
+  // Identity guard: one check covers all devices -- same (bundle_id, label) for Bushel
+  const { isIdentityTrusted } = require('./lib/identity-trust');
+  const bushelTrust = await isIdentityTrusted(outdatedDevices[0].bundle_id, label);
+  if (!bushelTrust.trusted) {
+    return res.status(403).json({ error: bushelTrust.reason });
   }
 
   // Insert one job per device in a single transaction
@@ -590,7 +614,8 @@ app.post("/patch-jobs/orchard", apiRateLimit, authMiddleware, async (req, res) =
         a.installomator_label,
         a.name AS app_name,
         a.version AS installed_version,
-        lv.latest_version
+        lv.latest_version,
+        a.bundle_id
       FROM apps a
       LEFT JOIN app_catalog ac ON ac.bundle_id = a.bundle_id
       LEFT JOIN latest_versions lv ON lv.label = COALESCE(a.installomator_label, ac.label)
@@ -605,20 +630,33 @@ app.post("/patch-jobs/orchard", apiRateLimit, authMiddleware, async (req, res) =
 
     const outdatedApps = appsResult.rows;
     if (outdatedApps.length > 0) {
-      deviceOutdated.push({
-        device_id: device.id,
-        hostname: device.hostname,
-        apps: outdatedApps
-      });
-
-      // Track unique apps
-      outdatedApps.forEach(app => {
-        const key = app.installomator_label;
-        if (!allApps.has(key)) {
-          allApps.set(key, { label: key, app_name: app.app_name, devices: new Set() });
+      // Identity guard: skip untrusted (bundle_id, label) pairs per app
+      const { isIdentityTrusted } = require('./lib/identity-trust');
+      const trustedOrcApps = [];
+      for (const app of outdatedApps) {
+        const trust = await isIdentityTrusted(app.bundle_id, app.installomator_label);
+        if (!trust.trusted) {
+          console.warn('[patch-guard] skipping orchard item: ' + trust.reason);
+        } else {
+          trustedOrcApps.push(app);
         }
-        allApps.get(key).devices.add(device.id);
-      });
+      }
+      if (trustedOrcApps.length > 0) {
+        deviceOutdated.push({
+          device_id: device.id,
+          hostname: device.hostname,
+          apps: trustedOrcApps
+        });
+
+        // Track unique apps
+        trustedOrcApps.forEach(app => {
+          const key = app.installomator_label;
+          if (!allApps.has(key)) {
+            allApps.set(key, { label: key, app_name: app.app_name, devices: new Set() });
+          }
+          allApps.get(key).devices.add(device.id);
+        });
+      }
     }
   }
 
@@ -830,6 +868,17 @@ app.post("/patch", apiRateLimit, authMiddleware, async (req, res) => {
   if (!deviceId || typeof deviceId !== "string") return res.status(400).json({ error: "deviceId is required" });
   if (!label || typeof label !== "string") return res.status(400).json({ error: "label is required" });
   if (!appName || typeof appName !== "string") return res.status(400).json({ error: "appName is required" });
+
+  // Identity guard: refuse if the (bundleId, label) pair is not trusted
+  const { isIdentityTrusted } = require('./lib/identity-trust');
+  if (bundleId) {
+    const trust = await isIdentityTrusted(bundleId, label);
+    if (!trust.trusted) {
+      return res.status(403).json({ error: trust.reason });
+    }
+  } else {
+    console.warn('[patch-guard] bundleId not provided for label=' + label + ', skipping identity check');
+  }
 
   const id = `patch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const createdAt = new Date().toISOString();
