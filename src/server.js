@@ -184,6 +184,9 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
       ));
     }
 
+    const { runCollisionDetector } = require('./lib/identity-collision-detector');
+    await runCollisionDetector().catch(e => console.error('[checkin] collision detector error:', e.message));
+
     console.log(`[CheckIn] ${device.hostname} — ${apps?.length || 0} apps`);
     res.json({ ok: true, deviceId, receivedAt: now });
   } catch (err) {
