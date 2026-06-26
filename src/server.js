@@ -888,7 +888,18 @@ app.post("/patch", apiRateLimit, authMiddleware, async (req, res) => {
       return res.status(403).json({ error: trust.reason });
     }
   } else {
-    console.warn('[patch-guard] bundleId not provided for label=' + label + ', skipping identity check');
+    // No bundleId (catalog deploy path): check label-level conflict
+    const conflictCheck = await pool.query(
+      'SELECT 1 FROM identity_conflicts ' +
+      'WHERE token = $1 AND source = $2 AND resolved = false LIMIT 1',
+      [label, 'installomator_label']
+    );
+    if (conflictCheck.rows.length > 0) {
+      return res.status(403).json({
+        error: 'Label ' + label + ' has an unresolved identity conflict. ' +
+          'Deploying this label is unsafe until the conflict is resolved.'
+      });
+    }
   }
 
   const id = `patch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
