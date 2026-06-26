@@ -90,10 +90,10 @@ async function resolveHomebrew(pool) {
     if (!cask) continue;
     matched++;
 
-    // Update homebrew_cask on app_identity -- never overwrite curated rows
+    // Update homebrew_cask on app_identity -- never overwrite curated rows or MAS apps
     await pool.query(
-      'UPDATE app_identity SET homebrew_cask = $1, last_derived = now() WHERE bundle_id = $2 AND curated = false',
-      [cask.token, identity.bundle_id]
+      'UPDATE app_identity SET homebrew_cask = $1, last_derived = now() WHERE bundle_id = $2 AND curated = false AND NOT EXISTS (SELECT 1 FROM apps WHERE bundle_id = $2 AND source = $3)',
+      [cask.token, identity.bundle_id, 'mas']
     );
 
     if (!cask.version) continue;
