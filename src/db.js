@@ -238,6 +238,15 @@ async function migrate() {
   }
   console.log('[DB] Curated seed rows applied (' + curatedRows.length + ')');
 
+  // Sync existing apps rows to match curated identity labels (idempotent, IS DISTINCT FROM handles NULLs)
+  await pool.query(
+    'UPDATE apps a SET installomator_label = ai.installomator_label ' +
+    'FROM app_identity ai ' +
+    'WHERE a.bundle_id = ai.bundle_id ' +
+    '  AND ai.curated = true ' +
+    '  AND a.installomator_label IS DISTINCT FROM ai.installomator_label'
+  ).catch((e) => { console.warn('[DB] curated apps sync warning:', e.message); });
+
   // Mark identity_conflicts resolved for the 6 curated bundle IDs
   await pool.query(
     'UPDATE identity_conflicts SET resolved = true ' +

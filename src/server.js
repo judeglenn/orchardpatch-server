@@ -153,6 +153,17 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
     // Upsert apps
     if (Array.isArray(apps) && apps.length > 0) {
       for (const app of apps) {
+        // Curated identity override: if app_identity has a curated row, always use its label
+        let resolvedLabel = s(app.installomatorLabel, 100);
+        if (app.bundleId) {
+          const curatedResult = await pool.query(
+            'SELECT installomator_label FROM app_identity WHERE bundle_id = $1 AND curated = true',
+            [app.bundleId]
+          );
+          if (curatedResult.rows.length > 0) {
+            resolvedLabel = curatedResult.rows[0].installomator_label || null;
+          }
+        }
         await pool.query(`
           INSERT INTO apps (device_id, bundle_id, name, version, latest_version, is_outdated, installomator_label, path, source, last_seen)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
@@ -167,7 +178,7 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
             last_seen = EXCLUDED.last_seen
         `, [deviceId, s(app.bundleId) || "", s(app.name) || "", s(app.version, 100),
             s(app.latestVersion, 100), app.isOutdated ? 1 : 0,
-            s(app.installomatorLabel, 100), s(app.path, 500), s(app.source, 50), now]);
+            resolvedLabel, s(app.path, 500), s(app.source, 50), now]);
       }
     }
 
