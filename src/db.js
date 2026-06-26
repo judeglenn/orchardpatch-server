@@ -126,6 +126,16 @@ async function migrate() {
       completed_at TIMESTAMPTZ,
       result TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS identity_conflicts (
+      id SERIAL PRIMARY KEY,
+      bundle_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      token TEXT NOT NULL,
+      competing_bundle_ids TEXT[] NOT NULL,
+      detected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved BOOLEAN NOT NULL DEFAULT false
+    );
   `);
 
   // Add agent_url to devices for existing deployments
@@ -178,6 +188,17 @@ async function migrate() {
   await pool.query(`
     ALTER TABLE app_catalog ADD COLUMN IF NOT EXISTS download_url TEXT;
   `).catch(() => {});
+
+  // MAS cleanup: null out label and cask on any existing app_identity rows for MAS apps.
+  // Idempotent; curated=true rows are intentionally preserved.
+  await pool.query(`
+    UPDATE app_identity ai
+    SET installomator_label = NULL, homebrew_cask = NULL
+    FROM apps a
+    WHERE ai.bundle_id = a.bundle_id
+      AND a.source = 'mas'
+      AND (ai.curated IS NULL OR ai.curated = false)
+  `).catch((e) => { console.warn('[DB] MAS cleanup warning:', e.message); });
 
   console.log("[DB] Schema ready");
 }
