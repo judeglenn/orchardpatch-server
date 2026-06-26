@@ -33,6 +33,9 @@ async function bootstrapIdentity(pool) {
   `);
 
   console.log(`[identity bootstrap] ${result.rowCount} rows upserted from installed apps`);
+
+  const { runCollisionDetector } = require('./identity-collision-detector');
+  await runCollisionDetector();
 }
 
 module.exports = { bootstrapIdentity };

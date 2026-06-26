@@ -2,6 +2,7 @@
 const { resolveHomebrew } = require('./resolvers/homebrew');
 const { resolveSparkle } = require('./resolvers/sparkle');
 const { resolveGitHub } = require('./resolvers/github');
+const { runCollisionDetector } = require('./identity-collision-detector');
 
 // Trust order: higher index = higher trust
 const TRUST_ORDER = ['homebrew', 'github', 'sparkle'];
@@ -68,6 +69,9 @@ async function runAllResolvers(pool) {
   }
 
   console.log('[resolver-cron] done. written=' + written + ' rows');
+
+  await runCollisionDetector();
+  console.log('[resolver-cron] collision detector complete');
 }
 
 function startResolverCron(pool) {

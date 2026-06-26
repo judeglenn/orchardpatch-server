@@ -136,6 +136,9 @@ async function migrate() {
       detected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       resolved BOOLEAN NOT NULL DEFAULT false
     );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS identity_conflicts_unique
+    ON identity_conflicts (bundle_id, source, token);
   `);
 
   // Add agent_url to devices for existing deployments
