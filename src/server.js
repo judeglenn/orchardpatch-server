@@ -352,6 +352,71 @@ app.get("/stats", apiRateLimit, authMiddleware, async (req, res) => {
   }
 });
 
+app.get("/api/stats/patch-status", apiRateLimit, authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      WITH status_per_row AS (
+        SELECT
+          COALESCE(a.bundle_id, a.name) AS key,
+          a.source,
+          CASE
+            WHEN a.source = 'system' THEN 'na'
+            WHEN a.source = 'mas'    THEN 'na'
+            WHEN lv.latest_version IS NULL THEN 'unknown'
+            WHEN regexp_replace(
+              regexp_replace(
+                regexp_replace(a.version, '\s*\([^)]*\)', '', 'g'),
+                ',.*', ''
+              ),
+              '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
+            ) =
+            regexp_replace(
+              regexp_replace(
+                regexp_replace(lv.latest_version, '\s*\([^)]*\)', '', 'g'),
+                ',.*', ''
+              ),
+              '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
+            ) THEN 'current'
+            ELSE 'outdated'
+          END AS patch_status
+        FROM apps a
+        LEFT JOIN app_catalog ac ON ac.bundle_id = a.bundle_id
+        LEFT JOIN latest_versions lv
+          ON lv.label = COALESCE(a.installomator_label, ac.label)
+      ),
+      deduped AS (
+        SELECT DISTINCT ON (key)
+          key, source, patch_status
+        FROM status_per_row
+        ORDER BY key,
+          CASE patch_status
+            WHEN 'outdated' THEN 4
+            WHEN 'unknown'  THEN 3
+            WHEN 'current'  THEN 2
+            ELSE 1
+          END DESC
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE patch_status = 'outdated') AS outdated,
+        COUNT(*) FILTER (WHERE patch_status = 'current')  AS current,
+        COUNT(*) FILTER (WHERE patch_status = 'unknown')  AS unknown,
+        COUNT(*) FILTER (WHERE patch_status = 'na' AND source != 'mas') AS system,
+        COUNT(*) FILTER (WHERE source = 'mas') AS store
+      FROM deduped
+    `);
+    const row = result.rows[0];
+    const outdated = parseInt(row.outdated);
+    const current  = parseInt(row.current);
+    const unknown  = parseInt(row.unknown);
+    const system   = parseInt(row.system);
+    const store    = parseInt(row.store);
+    res.json({ outdated, current, unknown, system, store, total: outdated + current + unknown + system + store });
+  } catch (err) {
+    console.error("[GET /api/stats/patch-status]", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // ─── Patch Jobs ───────────────────────────────────────────────────────────────
 
 const VALID_MODES = ["silent", "managed", "prompted"];
