@@ -192,6 +192,12 @@ async function migrate() {
     ALTER TABLE app_catalog ADD COLUMN IF NOT EXISTS download_url TEXT;
   `).catch(() => {});
 
+  // Add last_seen column to apps for soft-delete TTL tracking
+  await pool.query(`ALTER TABLE apps ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ`).catch(() => {});
+
+  // Initialize last_seen for existing rows that have a null value
+  await pool.query(`UPDATE apps SET last_seen = now() WHERE last_seen IS NULL`).catch(() => {});
+
   // MAS cleanup: null out label and cask on any existing app_identity rows for MAS apps.
   // Idempotent; curated=true rows are intentionally preserved.
   await pool.query(`
