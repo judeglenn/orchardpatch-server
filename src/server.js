@@ -175,7 +175,7 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
             installomator_label = EXCLUDED.installomator_label,
             path = EXCLUDED.path,
             source = EXCLUDED.source,
-            last_seen = EXCLUDED.last_seen
+            last_seen = now()
         `, [deviceId, s(app.bundleId) || "", s(app.name) || "", s(app.version, 100),
             s(app.latestVersion, 100), app.isOutdated ? 1 : 0,
             resolvedLabel, s(app.path, 500), s(app.source, 50), now]);
