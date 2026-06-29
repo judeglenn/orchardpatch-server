@@ -70,7 +70,9 @@ async function runAllResolvers(pool) {
 
   console.log('[resolver-cron] done. written=' + written + ' rows');
 
-  await runCollisionDetector();
+  await runCollisionDetector().catch(err =>
+    console.error('[cron] collision detector error:', err.message)
+  );
   console.log('[resolver-cron] collision detector complete');
 }
 

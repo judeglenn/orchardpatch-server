@@ -34,9 +34,34 @@ async function detectAndRefuseCollisions(column) {
   }
 }
 
+async function resolveSettledConflicts() {
+  const result = await pool.query(`
+    UPDATE identity_conflicts ic
+    SET resolved = true
+    WHERE ic.resolved = false
+    AND (
+      SELECT COUNT(DISTINCT ai.bundle_id)
+      FROM app_identity ai
+      WHERE ai.curated = false
+      AND (
+        (ic.source = 'homebrew_cask'
+         AND ai.homebrew_cask = ic.token)
+        OR
+        (ic.source = 'installomator_label'
+         AND ai.installomator_label = ic.token)
+      )
+    ) < 2
+  `);
+  if (result.rowCount > 0) {
+    console.log('[identity] resolved', result.rowCount,
+      'settled conflict(s)');
+  }
+}
+
 async function runCollisionDetector() {
   await detectAndRefuseCollisions('homebrew_cask');
   await detectAndRefuseCollisions('installomator_label');
+  await resolveSettledConflicts();
 }
 
 module.exports = { runCollisionDetector };
