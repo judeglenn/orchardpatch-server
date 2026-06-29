@@ -461,12 +461,14 @@ app.post("/patch-jobs/branch", apiRateLimit, authMiddleware, async (req, res) =>
     SELECT a.installomator_label AS label, a.name AS app_name, a.version AS installed_version, a.bundle_id
     FROM apps a
     JOIN latest_versions lv ON lv.label = a.installomator_label
+    JOIN devices d ON d.id = a.device_id
     WHERE a.device_id = $1
       AND a.installomator_label = ANY($2::text[])
       AND lv.latest_version IS NOT NULL
       AND lv.latest_version != ''
       AND a.version IS NOT NULL
       AND lv.latest_version != a.version
+      AND a.last_seen >= d.last_seen - interval '45 minutes'
   `, [s(device_id, 100), labels.map(l => s(l, 100))]);
 
   const validatedApps = validationResult.rows;
@@ -552,6 +554,7 @@ app.post("/patch-jobs/bushel", apiRateLimit, authMiddleware, async (req, res) =>
       AND lv.latest_version != ''
       AND a.version IS NOT NULL
       AND lv.latest_version != a.version
+      AND a.last_seen >= d.last_seen - interval '45 minutes'
   `, [s(label, 100)]);
 
   const outdatedDevices = devicesResult.rows;
@@ -634,6 +637,7 @@ app.post("/patch-jobs/orchard", apiRateLimit, authMiddleware, async (req, res) =
         lv.latest_version,
         a.bundle_id
       FROM apps a
+      JOIN devices d ON d.id = a.device_id
       LEFT JOIN app_catalog ac ON ac.bundle_id = a.bundle_id
       LEFT JOIN latest_versions lv ON lv.label = COALESCE(a.installomator_label, ac.label)
       WHERE a.device_id = $1
@@ -642,6 +646,7 @@ app.post("/patch-jobs/orchard", apiRateLimit, authMiddleware, async (req, res) =
         AND lv.latest_version != ''
         AND a.version IS NOT NULL
         AND lv.latest_version != a.version
+        AND a.last_seen >= d.last_seen - interval '45 minutes'
       ORDER BY a.name
     `, [s(device.id, 100)]);
 
@@ -885,6 +890,26 @@ app.post("/patch", apiRateLimit, authMiddleware, async (req, res) => {
   if (!deviceId || typeof deviceId !== "string") return res.status(400).json({ error: "deviceId is required" });
   if (!label || typeof label !== "string") return res.status(400).json({ error: "label is required" });
   if (!appName || typeof appName !== "string") return res.status(400).json({ error: "appName is required" });
+
+  // Removal guard: refuse if the app is no longer present on the device
+  if (bundleId) {
+    const removalCheck = await pool.query(
+      `SELECT a.last_seen, d.last_seen AS device_last_seen
+       FROM apps a
+       JOIN devices d ON d.id = a.device_id
+       WHERE a.device_id = $1 AND a.bundle_id = $2`,
+      [deviceId, bundleId]
+    );
+    if (removalCheck.rows.length > 0) {
+      const { last_seen, device_last_seen } = removalCheck.rows[0];
+      const cutoff = new Date(device_last_seen).getTime() - 45 * 60 * 1000;
+      if (new Date(last_seen).getTime() < cutoff) {
+        return res.status(409).json({
+          error: 'This app is no longer present on the device and cannot be patched.'
+        });
+      }
+    }
+  }
 
   // Identity guard: refuse if the (bundleId, label) pair is not trusted
   const { isIdentityTrusted } = require('./lib/identity-trust');
