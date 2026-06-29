@@ -267,10 +267,23 @@ async function migrate() {
   console.log("[DB] Schema ready");
 }
 
-migrate().catch(err => {
-  console.error("[DB] Migration failed:", err.message);
-  console.error("[DB] Full error:", err);
-  process.exit(1);
-});
+async function migrateWithRetry(maxAttempts = 10, delayMs = 3000) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await migrate();
+      return;
+    } catch (err) {
+      console.error(`[DB] Migration attempt ${attempt}/${maxAttempts} failed:`, err.message);
+      if (attempt === maxAttempts) {
+        console.error("[DB] All migration attempts exhausted. Exiting.");
+        process.exit(1);
+      }
+      console.log(`[DB] Retrying in ${delayMs / 1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+migrateWithRetry();
 
 module.exports = pool;
