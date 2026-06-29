@@ -198,6 +198,9 @@ async function migrate() {
   // Initialize last_seen for existing rows that have a null value
   await pool.query(`UPDATE apps SET last_seen = now() WHERE last_seen IS NULL`).catch(() => {});
 
+  // Promote last_seen from TEXT to TIMESTAMPTZ on warm DBs (no-op if already TIMESTAMPTZ)
+  await pool.query(`ALTER TABLE apps ALTER COLUMN last_seen TYPE TIMESTAMPTZ USING last_seen::timestamptz`).catch(() => {});
+
   // MAS cleanup: null out label and cask on any existing app_identity rows for MAS apps.
   // Idempotent; curated=true rows are intentionally preserved.
   await pool.query(`
