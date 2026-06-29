@@ -145,7 +145,7 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
         cpu = EXCLUDED.cpu,
         agent_version = EXCLUDED.agent_version,
         agent_url = EXCLUDED.agent_url,
-        last_seen = EXCLUDED.last_seen
+        last_seen = now()
     `, [deviceId, s(device.hostname), s(device.serial, 50), s(device.model),
         s(device.osVersion, 50), s(device.ram, 50), s(device.cpu),
         s(agentVersion, 50) || "unknown", s(agentUrl, 500) || null, now]);
@@ -239,6 +239,7 @@ app.get("/devices", apiRateLimit, authMiddleware, async (req, res) => {
               ),
               '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
             )
+            AND a.last_seen >= d.last_seen - interval '45 minutes'
           THEN a.bundle_id
         END) as outdated_count
       FROM devices d
@@ -306,8 +307,11 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
             '^([0-9]+\\.[0-9]+\\.[0-9]+)\\..*$', '\\1'
           ) THEN 'current'
           ELSE 'outdated'
-        END AS patch_status
+        END AS patch_status,
+        CASE WHEN a.last_seen >= d.last_seen - interval '45 minutes'
+          THEN 'present' ELSE 'removed' END AS removal_state
       FROM apps a
+      JOIN devices d ON d.id = a.device_id
       LEFT JOIN app_catalog ac ON ac.bundle_id = a.bundle_id
       LEFT JOIN latest_versions lv
         ON lv.label = COALESCE(a.installomator_label, ac.label)
@@ -394,9 +398,11 @@ app.get("/api/stats/patch-status", apiRateLimit, authMiddleware, async (req, res
             ELSE 'outdated'
           END AS patch_status
         FROM apps a
+        JOIN devices d ON d.id = a.device_id
         LEFT JOIN app_catalog ac ON ac.bundle_id = a.bundle_id
         LEFT JOIN latest_versions lv
           ON lv.label = COALESCE(a.installomator_label, ac.label)
+        WHERE a.last_seen >= d.last_seen - interval '45 minutes'
       ),
       deduped AS (
         SELECT DISTINCT ON (key)
