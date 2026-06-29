@@ -1104,7 +1104,7 @@ app.post("/api/force-checkin", apiRateLimit, authMiddleware, async (req, res) =>
 setInterval(async () => {
   try {
     const result = await pool.query(
-      "SELECT id FROM pending_patches WHERE claimed_at IS NULL AND created_at < now() - interval '24 hours'"
+      "SELECT id FROM pending_patches WHERE claimed_at IS NULL AND created_at::timestamptz < now() - interval '24 hours'"
     );
     for (const row of result.rows) {
       try {
