@@ -201,6 +201,9 @@ async function migrate() {
   // Promote last_seen from TEXT to TIMESTAMPTZ on warm DBs (no-op if already TIMESTAMPTZ)
   await pool.query(`ALTER TABLE apps ALTER COLUMN last_seen TYPE TIMESTAMPTZ USING last_seen::timestamptz`).catch(() => {});
 
+  // Promote devices.last_seen from TEXT to TIMESTAMPTZ (no-op if already TIMESTAMPTZ)
+  await pool.query(`ALTER TABLE devices ALTER COLUMN last_seen TYPE TIMESTAMPTZ USING last_seen::timestamptz`).catch(() => {});
+
   // MAS cleanup: null out label and cask on any existing app_identity rows for MAS apps.
   // Idempotent; curated=true rows are intentionally preserved.
   await pool.query(`
