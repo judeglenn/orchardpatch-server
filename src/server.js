@@ -286,6 +286,7 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
         lv.last_checked,
         EXTRACT(EPOCH FROM (NOW() - lv.last_checked::timestamptz))::int AS cache_age_seconds,
         a.source,
+        a.last_seen,
         COALESCE(a.installomator_label, ac.label) AS label,
         rv.latest_available,
         CASE
