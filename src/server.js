@@ -150,7 +150,8 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
         s(device.osVersion, 50), s(device.ram, 50), s(device.cpu),
         s(agentVersion, 50) || "unknown", s(agentUrl, 500) || null, now]);
 
-    // Upsert apps
+    // Upsert apps; collect appeared events for batch write after the loop
+    const appearedApps = [];
     if (Array.isArray(apps) && apps.length > 0) {
       for (const app of apps) {
         // Curated identity override: if app_identity has a curated row, always use its label
@@ -164,7 +165,7 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
             resolvedLabel = curatedResult.rows[0].installomator_label || null;
           }
         }
-        await pool.query(`
+        const upsertResult = await pool.query(`
           INSERT INTO apps (device_id, bundle_id, name, version, latest_version, is_outdated, installomator_label, path, source, last_seen)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
           ON CONFLICT(device_id, bundle_id) DO UPDATE SET
@@ -176,9 +177,33 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
             path = EXCLUDED.path,
             source = EXCLUDED.source,
             last_seen = now()
+          RETURNING (xmax = 0) AS inserted
         `, [deviceId, s(app.bundleId) || "", s(app.name) || "", s(app.version, 100),
             s(app.latestVersion, 100), app.isOutdated ? 1 : 0,
             resolvedLabel, s(app.path, 500), s(app.source, 50), now]);
+        if (upsertResult.rows[0] && upsertResult.rows[0].inserted === true) {
+          appearedApps.push({
+            bundleId: s(app.bundleId) || '',
+            deviceId: deviceId,
+            name: s(app.name) || '',
+            version: s(app.version, 100) || null
+          });
+        }
+      }
+      // Batch insert appeared lifecycle events (one query, not one-per-app)
+      if (appearedApps.length > 0) {
+        const valClauses = appearedApps.map(function(_, i) {
+          var b = i * 4 + 1;
+          return '($' + b + ', $' + (b + 1) + ", 'appeared', $" + (b + 2) + ', $' + (b + 3) + ')';
+        }).join(', ');
+        const flatParams = appearedApps.reduce(function(acc, a) {
+          return acc.concat([a.bundleId, a.deviceId, a.name, a.version]);
+        }, []);
+        await pool.query(
+          'INSERT INTO app_lifecycle_events (bundle_id, device_id, event_type, app_name, version_at_event) VALUES ' + valClauses,
+          flatParams
+        ).catch(function(e) { console.error('[lifecycle] appeared batch insert error:', e.message); });
+        console.log('[lifecycle] appeared events recorded:', appearedApps.length);
       }
     }
 
@@ -197,6 +222,9 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
 
     const { runCollisionDetector } = require('./lib/identity-collision-detector');
     await runCollisionDetector().catch(e => console.error('[checkin] collision detector error:', e.message));
+
+    const { recordRemovalEvents } = require('./lib/lifecycle-events');
+    await recordRemovalEvents().catch(e => console.error('[checkin] lifecycle events error:', e.message));
 
     console.log(`[CheckIn] ${device.hostname} — ${apps?.length || 0} apps`);
     res.json({ ok: true, deviceId, receivedAt: now });

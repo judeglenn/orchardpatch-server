@@ -36,6 +36,9 @@ async function bootstrapIdentity(pool) {
 
   const { runCollisionDetector } = require('./identity-collision-detector');
   await runCollisionDetector();
+
+  const { recordRemovalEvents } = require('./lifecycle-events');
+  await recordRemovalEvents();
 }
 
 module.exports = { bootstrapIdentity };

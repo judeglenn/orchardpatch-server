@@ -204,6 +204,24 @@ async function migrate() {
   // Promote devices.last_seen from TEXT to TIMESTAMPTZ (no-op if already TIMESTAMPTZ)
   await pool.query(`ALTER TABLE devices ALTER COLUMN last_seen TYPE TIMESTAMPTZ USING last_seen::timestamptz`).catch(() => {});
 
+  // app_lifecycle_events: tracks appeared/removed events per bundle_id+device_id
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_lifecycle_events (
+      id SERIAL PRIMARY KEY,
+      bundle_id TEXT NOT NULL,
+      device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL,
+      occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      app_name TEXT,
+      version_at_event TEXT
+    );
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_lifecycle_events_lookup
+    ON app_lifecycle_events(bundle_id, device_id, occurred_at DESC);
+  `).catch(() => {});
+
   // MAS cleanup: null out label and cask on any existing app_identity rows for MAS apps.
   // Idempotent; curated=true rows are intentionally preserved.
   await pool.query(`

@@ -74,6 +74,11 @@ async function runAllResolvers(pool) {
     console.error('[cron] collision detector error:', err.message)
   );
   console.log('[resolver-cron] collision detector complete');
+
+  const { recordRemovalEvents } = require('./lifecycle-events');
+  await recordRemovalEvents().catch(err =>
+    console.error('[cron] lifecycle events error:', err.message)
+  );
 }
 
 function startResolverCron(pool) {
