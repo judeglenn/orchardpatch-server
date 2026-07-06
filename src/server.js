@@ -355,6 +355,21 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
   }
 });
 
+app.get("/apps/:bundleId/first-seen", apiRateLimit, authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT MIN(occurred_at) AS first_seen
+       FROM app_lifecycle_events
+       WHERE bundle_id = $1 AND event_type = 'appeared'`,
+      [req.params.bundleId]
+    );
+    res.json({ firstSeen: result.rows[0]?.first_seen ?? null });
+  } catch (err) {
+    console.error("[GET /apps/:bundleId/first-seen]", err.message);
+    res.status(500).json({ error: "Failed to fetch first-seen date" });
+  }
+});
+
 app.get("/apps", apiRateLimit, authMiddleware, async (req, res) => {
   try {
     const outdatedOnly = req.query.outdated === "true";
