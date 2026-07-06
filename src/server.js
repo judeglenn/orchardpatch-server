@@ -242,7 +242,7 @@ app.get("/health", async (req, res) => {
     const apps = await pool.query("SELECT COUNT(*) as n FROM apps");
     res.json({ status: "ok", server: "orchardpatch", deviceCount: parseInt(devices.rows[0].n), appCount: parseInt(apps.rows[0].n) });
   } catch (err) {
-    res.json({ status: "ok", server: "orchardpatch", deviceCount: 0, appCount: 0 });
+    res.status(503).json({ status: "error", server: "orchardpatch", error: err.message });
   }
 });
 
@@ -1216,10 +1216,10 @@ app.use((err, req, res, next) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-(async () => {
-  try { await bootstrapIdentity(pool); } catch (e) { console.error('identity bootstrap failed:', e.message); }
-  startResolverCron(pool);
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[OrchardPatch Server] Listening on port ${PORT}`);
-  });
-})();
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`[OrchardPatch Server] Listening on port ${PORT}`);
+});
+
+startResolverCron(pool);
+
+bootstrapIdentity(pool).catch(e => console.error('identity bootstrap failed:', e.message));
