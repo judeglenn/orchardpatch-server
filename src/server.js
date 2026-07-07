@@ -9,6 +9,7 @@ const helmet = require("helmet");
 const pool = require("./db");
 const { bootstrapIdentity } = require("./lib/identity-bootstrap");
 const { startResolverCron } = require('./lib/resolver-cron');
+const { deriveStatus } = require('./lib/app-status');
 const versionSyncRouter = require("./routes/version-sync");
 const catalogSyncRouter = require("./routes/catalog-sync");
 
@@ -317,6 +318,7 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
         a.last_seen,
         COALESCE(a.installomator_label, ac.label) AS label,
         rv.latest_available,
+        d.last_seen AS device_last_seen,
         CASE
           WHEN a.source = 'system' THEN 'na'
           WHEN a.source = 'mas' THEN 'na'
@@ -348,7 +350,25 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
       ${whereClause}
       ORDER BY a.name
     `, params);
-    res.json({ apps: result.rows });
+    const apps = result.rows.map(row => {
+      const derived = deriveStatus({
+        version:         row.version,
+        latestPatchable: row.latest_version,
+        latestAvailable: row.latest_available,
+        source:          row.source,
+        appLastSeen:     row.last_seen,
+        deviceLastSeen:  row.device_last_seen,
+      });
+      if (derived.removalState !== row.removal_state) {
+        console.warn('[app-status] removal mismatch', row.bundle_id, row.device_id,
+          'sql:', row.removal_state, 'module:', derived.removalState);
+      }
+      return Object.assign({}, row, {
+        status:        derived.status,
+        removal_state: derived.removalState,
+      });
+    });
+    res.json({ apps });
   } catch (err) {
     console.error("[GET /apps/status]", err.message);
     res.status(500).json({ error: "Internal server error" });
