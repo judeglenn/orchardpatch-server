@@ -309,7 +309,7 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
         a.id,
         a.device_id,
         a.bundle_id,
-        a.name,
+        COALESCE(ai.app_name, a.name) AS name,
         a.version,
         lv.latest_version,
         lv.last_checked,
@@ -344,6 +344,7 @@ app.get("/apps/status", apiRateLimit, authMiddleware, async (req, res) => {
       FROM apps a
       JOIN devices d ON d.id = a.device_id
       LEFT JOIN app_catalog ac ON ac.bundle_id = a.bundle_id
+      LEFT JOIN app_identity ai ON ai.bundle_id = a.bundle_id AND ai.curated = true
       LEFT JOIN latest_versions lv
         ON lv.label = COALESCE(a.installomator_label, ac.label)
       LEFT JOIN resolved_versions rv ON rv.bundle_id = a.bundle_id
