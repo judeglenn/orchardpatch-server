@@ -131,9 +131,14 @@ test('deriveStatus: removed when appLastSeen is 46 min before deviceLastSeen', (
   assert.equal(result.removalState, 'removed');
 });
 
-// Spec case: 1Password 8 — appLastSeen June 16, deviceLastSeen now → removed
-test('deriveStatus: 1Password 8 — June 16 app vs July 6 device → removed', () => {
-  const result = deriveStatus(row({ appLastSeen: JUNE_16, deviceLastSeen: NOW }));
+// Spec case: 1Password 8 — appLastSeen June 16, deviceLastSeen now → removed.
+// Live bundle_id: com.1password.1password (not com.agilebits.onepassword8 which is synthetic/unused).
+test('deriveStatus: com.1password.1password — June 16 app vs July 6 device → removed', () => {
+  const result = deriveStatus(row({
+    bundle_id:   'com.1password.1password', // real live bundle ID confirmed July 6, 2026
+    appLastSeen:  JUNE_16,
+    deviceLastSeen: NOW,
+  }));
   assert.equal(result.removalState, 'removed');
 });
 
