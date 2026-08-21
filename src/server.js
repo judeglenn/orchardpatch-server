@@ -127,9 +127,21 @@ app.post("/checkin", checkinRateLimit, authMiddleware, async (req, res) => {
   if (apps !== undefined && !Array.isArray(apps)) return res.status(400).json({ error: "apps must be an array" });
   if (Array.isArray(apps) && apps.length > 5000) return res.status(400).json({ error: "Too many apps (max 5000)" });
 
-  const deviceId = device.serial
-    ? `device-${s(device.serial, 50).replace(/[^a-zA-Z0-9]/g, "-")}`
-    : `device-${s(device.hostname, 100).replace(/[^a-zA-Z0-9]/g, "-")}`;
+  // Device identity is the hardware serial — intrinsic, not user-mutable.
+  // Hostname is non-unique and mutable; we never derive identity from it.
+  // Reject early so no device row, app rows, or lifecycle events are written.
+  const rawSerial = s(device.serial, 50);
+  const sanitizedSerial = rawSerial ? rawSerial.replace(/[^a-zA-Z0-9]/g, "-") : "";
+  if (!sanitizedSerial || sanitizedSerial === "unknown" || sanitizedSerial.length < 8) {
+    console.warn(
+      `[CheckIn] REJECTED — missing or invalid serial: hostname=${device.hostname} serial=${JSON.stringify(device.serial)} agentVersion=${agentVersion || "unknown"}`
+    );
+    return res.status(400).json({
+      error: "device.serial is required and must be a non-empty hardware serial of at least 8 characters",
+      reason: "identity_requires_serial",
+    });
+  }
+  const deviceId = `device-${sanitizedSerial}`;
 
   const now = s(collectedAt, 30) || new Date().toISOString();
 

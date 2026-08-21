@@ -176,12 +176,6 @@ async function migrate() {
       AND id NOT IN (SELECT id FROM pending_patches);
   `).catch(() => {});
 
-  // Delete phantom 'device-Mac' -- duplicate registration from early agent install,
-  // same device as device-GJM7N0XGL0 (Jude's MacBook Pro) with truncated hostname
-  await pool.query(`
-    DELETE FROM devices WHERE id = 'device-Mac';
-  `).catch(() => {});
-
   // Add last_synced column to app_catalog if it doesn't exist
   await pool.query(`
     ALTER TABLE app_catalog ADD COLUMN IF NOT EXISTS last_synced TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'));
