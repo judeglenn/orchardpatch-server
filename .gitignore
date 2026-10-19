@@ -4,3 +4,8 @@ data/
 *.db-shm
 *.db-wal
 .env
+
+# Session handoff files — kept in ~/orchardpatch-notes/, not in repo
+CONTEXT.md
+PROJECT.md
+session-*.md
